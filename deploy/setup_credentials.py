@@ -268,13 +268,13 @@ def setup_zoho() -> None:
     zoho_hdr = {"Authorization": f"Zoho-oauthtoken {access_token}"}   # CRM + Mail
     bearer_hdr = {"Authorization": f"Bearer {access_token}"}          # Cliq
 
-    crm = requests.get(f"{api_domain}/crm/v8/org", headers=zoho_hdr, timeout=TIMEOUT)
-    if crm.status_code == 200:
-        try:
-            org = crm.json().get("org", [{}])[0]
-            print(f"  CRM: OK (org: {org.get('company_name', 'unnamed')})")
-        except (ValueError, IndexError, AttributeError):
-            print("  CRM: HTTP 200")
+    # Verify with a records read: the pipeline uses ZohoCRM.modules.* only.
+    # (/crm/v8/org would need ZohoCRM.org.READ, which we deliberately don't request.)
+    crm = requests.get(f"{api_domain}/crm/v8/Leads",
+                       params={"fields": "Email", "per_page": 1},
+                       headers=zoho_hdr, timeout=TIMEOUT)
+    if crm.status_code in (200, 204):
+        print("  CRM: OK (Leads module readable; 204 just means no records yet)")
     else:
         print(f"  CRM: HTTP {crm.status_code} — check ZohoCRM scopes ({crm.text[:150]})")
 
