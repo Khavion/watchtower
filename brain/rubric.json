@@ -1,0 +1,98 @@
+{
+  "version": "1.0.0",
+  "updated": "2026-07-24",
+  "notes": "Weights, points, and thresholds are config. pipeline/score.py maps signal ids to deterministic detectors; changing scoring behavior means editing this file, not code. Criterion score = sum of matched signal points (capped 100); total = weighted sum (0-100). Any hard_fail zeroes the total regardless of everything else.",
+  "thresholds": {
+    "account_draft_min": 60,
+    "solicitation_gonogo_min": 50
+  },
+  "hard_fail": [
+    "blocklist_hit",
+    "out_of_scope_boundaries",
+    "headcount_out_of_range",
+    "no_reachable_buyer",
+    "requires_onsite",
+    "requires_w2",
+    "requires_unheld_certification"
+  ],
+  "account_criteria": {
+    "icp_fit": {
+      "weight": 30,
+      "signals": {
+        "employees_in_range": 40,
+        "us_based": 20,
+        "industry_match": 25,
+        "funding_stage_series_a_or_b": 15
+      }
+    },
+    "cloud_footprint": {
+      "weight": 20,
+      "signals": {
+        "aws_detected": 45,
+        "kubernetes_detected": 35,
+        "other_cloud_detected": 20
+      }
+    },
+    "trigger_recency": {
+      "weight": 25,
+      "signals": {
+        "decayed_trigger_sum": 100
+      },
+      "notes": "Trigger weights and horizons come from brain/triggers.md; each observed trigger contributes weight * linear_decay(age/horizon), normalized to 100."
+    },
+    "buyer_seniority": {
+      "weight": 15,
+      "mode": "best_match",
+      "signals": {
+        "c_suite": 100,
+        "vp": 85,
+        "head": 70,
+        "director": 55
+      }
+    },
+    "contactability": {
+      "weight": 10,
+      "mode": "best_match",
+      "signals": {
+        "email_verified": 100,
+        "email_likely_to_engage": 70,
+        "email_unverified": 30,
+        "email_unavailable": 0
+      }
+    }
+  },
+  "solicitation_criteria": {
+    "capability_match": {
+      "weight": 40,
+      "signals": {
+        "keyword_hits_scaled": 100
+      },
+      "notes": "Scaled count of capability.md/sources.yaml keyword hits in title+description+NIGP/NAICS."
+    },
+    "notice_type_fit": {
+      "weight": 25,
+      "mode": "best_match",
+      "signals": {
+        "sources_sought_or_rfi": 100,
+        "presolicitation": 60,
+        "full_solicitation": 30
+      }
+    },
+    "timeline_runway": {
+      "weight": 20,
+      "signals": {
+        "runway_scaled": 100
+      },
+      "notes": "0 at min_deadline_days (caps.yaml), 100 at 30+ days of runway."
+    },
+    "agency_fit": {
+      "weight": 15,
+      "mode": "best_match",
+      "signals": {
+        "texas_state_or_local": 100,
+        "federal_sources_sought": 70,
+        "federal_full": 30
+      }
+    }
+  }
+}

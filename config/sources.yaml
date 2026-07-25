@@ -91,6 +91,17 @@ university_boards:
     work hides on Bonfire portals we cannot reach). AggieBid
     (bids.sciquest.com, Jaggaer) is server-rendered but robots-disallowed and
     redundant with ESBD, so it is not fetched. This adapter filters ESBD records
-    by agency number prefix; prefixes verified during adapter build from live
-    ESBD agency data.
-  agency_number_prefixes: []   # populated during Phase 3a/3b build from ESBD agency list
+    by Agency/Texas SmartBuy Member Number. Numbers below extracted from the
+    live ESBD agency dropdown on 2026-07-24.
+  agency_numbers:
+    "730": "University Of Houston"
+    "759": "Univ Of Houston At Clear Lake"
+    "784": "Univ. Of Houston - Downtown"
+    "710": "Texas A&M University System"
+    "711": "Texas A&M University"
+    "712": "Texas A&M Engineering Experiment Station"
+    "709": "Texas A&M University Health Science Center"
+    "720": "University Of Texas System"
+    "721": "University Of Texas At Austin"
+  # Also matched by name keywords in title/description as a safety net:
+  name_keywords: ["university of houston", "texas a&m", "university of texas", "ut austin", "uthealth", "md anderson"]
