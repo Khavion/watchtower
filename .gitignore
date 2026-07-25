@@ -4,8 +4,6 @@
 .env.*
 *.pem
 *.key
-*_token*
-*credential*
 
 # Python
 .venv/
