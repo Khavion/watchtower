@@ -123,6 +123,10 @@ class SamGovAdapter(SourceAdapter):
         native_id = item.get("noticeId") or item.get("solicitationNumber") or "unknown"
         title = item.get("title") or "(untitled)"
         set_aside = item.get("typeOfSetAsideDescription") or item.get("typeOfSetAside") or None
+        # SAM records negatives explicitly ("No Set aside used", "None"):
+        # those are the absence of a set-aside, not set-aside language.
+        if set_aside and re.match(r"^\s*(no\b|none\b)", str(set_aside), re.IGNORECASE):
+            set_aside = None
         eligibility = None
         if group == "secondary" and PAST_PERFORMANCE_RE.search(title):
             eligibility = "NOT_YET_ELIGIBLE"
@@ -171,8 +175,14 @@ class SamGovAdapter(SourceAdapter):
                   ("secondary", [str(p) for p in own.get("ptypes_secondary", ["o", "k", "p"])])]
 
         collected: dict[str, RawSolicitation] = {}
-        # Primary group for every NAICS first, then secondary, until budget runs out.
-        plan = [(g, pt, n) for (g, pt) in groups for n in naics_list]
+        # Lead NAICS gets full coverage (primary + secondary) before any budget
+        # goes to additional NAICS codes; without this, a small daily quota is
+        # consumed entirely by primary searches and secondary notices plus
+        # description fetches never happen (observed live 2026-07-24).
+        lead, rest = naics_list[0], naics_list[1:]
+        plan = [(g, pt, lead) for (g, pt) in groups] + \
+               [(g, pt, n) for (g, pt) in groups for n in rest]
+        plan = plan[:max(1, budget - 2)]  # reserve calls for description fetches
         for group, ptypes, naics in plan:
             if budget <= 0:
                 log.warning("sam_gov: per-run call budget exhausted; remaining "

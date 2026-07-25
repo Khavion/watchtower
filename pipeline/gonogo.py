@@ -155,6 +155,13 @@ def run_gonogo(sol: dict, weekly_capacity_hours: float | None = None,
         m = SET_ASIDE_RE.search(text)
         if m:
             set_aside = " ".join(m.group(0).split())[:400]
+    # Explicit negatives ("No set-aside used", "this is not a set-aside") are
+    # the absence of a set-aside; routing them to NEEDS_HUMAN would bury real
+    # ones in noise. Anything ambiguous still goes to a human verbatim.
+    if set_aside and re.search(r"\b(no|not( a)?|without|none)\b[^.\n]{0,30}set[- ]?aside",
+                               set_aside, re.IGNORECASE) \
+            and not re.search(r"HUB|veteran|SDVOSB|8\(a\)|WOSB", set_aside, re.IGNORECASE):
+        set_aside = None
 
     incumbent = None
     award = (sol.get("raw") or {}).get("award")

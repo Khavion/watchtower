@@ -103,6 +103,17 @@ def test_sam_fetch_parses_and_flags(tmp_path):
     assert len(desc_calls) == 2 and all(p["api_key"] == "test-key" for _, p in desc_calls)
 
 
+def test_sam_negative_set_aside_normalized_to_none(tmp_path):
+    session = FakeSamSession()
+    session.by_type["def456"]["typeOfSetAsideDescription"] = "No Set aside used"
+    session.by_type["def456"]["typeOfSetAside"] = None
+    adapter = SamGovAdapter(SAM_CONFIG, session=session, api_key="k",
+                            daily_cap=10, state_path=tmp_path / "state.json")
+    results = adapter.fetch()
+    full = next(s for s in results if s.native_id == "def456")
+    assert full.set_aside_text is None
+
+
 def test_sam_daily_cap_halts_loudly(tmp_path, caplog):
     session = FakeSamSession()
     adapter = SamGovAdapter(SAM_CONFIG, session=session, api_key="k",
