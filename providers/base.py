@@ -16,6 +16,14 @@ class Provider(ABC):
     def generate(self, system: str, user: str, max_tokens: int) -> str:
         ...
 
+    def generate_json(self, system: str, user: str, schema: dict,
+                      max_tokens: int = 400, temperature: float = 0.0) -> dict:
+        """Schema-constrained generation. Providers that cannot constrain
+        decoding should raise ProviderUnavailable rather than return a guess:
+        callers treat that as UNCLASSIFIED and continue, never improvising."""
+        raise ProviderUnavailable(
+            f"{type(self).__name__} does not support schema-constrained output")
+
     def model_info(self) -> str:
         """Model name + version/digest, logged with every decision."""
         return "unknown"

@@ -57,11 +57,26 @@ if ! curl -sf -m 5 http://127.0.0.1:11434/api/tags >/dev/null; then
   curl -sf -m 5 http://127.0.0.1:11434/api/tags >/dev/null \
     || die "ollama server still unreachable on 127.0.0.1:11434"
 fi
-if ! ollama list 2>/dev/null | grep -q '^llama3.1:8b'; then
-  say "pulling llama3.1:8b (4.9 GB, one-time)"
-  ollama pull llama3.1:8b
+# The workhorse model is whatever config/providers.yaml says, so switching it is
+# still a one-line change and the installer never drifts from the config.
+WORKHORSE="$(.venv/bin/python -c 'from pipeline.config import providers; print(providers()["ollama"]["model"])')"
+[ -n "$WORKHORSE" ] || die "could not read the workhorse model from config/providers.yaml"
+if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qx "$WORKHORSE"; then
+  say "pulling $WORKHORSE (one-time, several GB)"
+  ollama pull "$WORKHORSE"
 fi
-say "ollama ready (llama3.1:8b present, loopback only)"
+say "ollama ready ($WORKHORSE present, loopback only)"
+
+# Ollama env must be durable: `launchctl setenv` is the only mechanism that
+# reaches the Ollama service, and it is wiped by every reboot. Without this the
+# system keeps working but silently truncates long documents to 4096 tokens.
+mkdir -p "$HOME/Library/LaunchAgents" data/runs
+OLLAMA_ENV_PLIST="$HOME/Library/LaunchAgents/com.khavion.ollamaenv.plist"
+sed "s|__REPO__|$REPO|g" deploy/com.khavion.ollamaenv.plist > "$OLLAMA_ENV_PLIST"
+launchctl bootout "gui/$(id -u)/com.khavion.ollamaenv" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$OLLAMA_ENV_PLIST" 2>/dev/null || true
+./deploy/ollama_env.sh >/dev/null 2>&1 || warn "ollama env script reported a problem; see data/runs/ollamaenv.err.log"
+say "ollama environment applied and made durable across reboots"
 
 # 4. Keychain: all six entries must exist ------------------------------------
 # Checked WITHOUT -w: exit status only, no secret is read or printed.

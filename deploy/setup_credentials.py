@@ -81,8 +81,12 @@ ZOHO_REGIONS = {
 }
 
 # Single grant-token scope line (exact strings verified 2026-07-24).
+# 2026-07-25: ZohoMail.messages.READ + ZohoMail.folders.READ added at Zohaib's
+# request so the inbox-triage agent can READ mail. There is still no send scope
+# and no send code path anywhere in this repo; triage drafts replies only.
 ZOHO_SCOPES = ("ZohoCRM.modules.ALL,ZohoCRM.settings.fields.READ,"
                "ZohoMail.accounts.READ,ZohoMail.messages.CREATE,"
+               "ZohoMail.messages.READ,ZohoMail.folders.READ,"
                "ZohoCliq.Webhooks.CREATE,ZohoCliq.Channels.READ,"
                "ZohoCliq.Messages.READ")
 
@@ -279,15 +283,33 @@ def setup_zoho() -> None:
         print(f"  CRM: HTTP {crm.status_code} — check ZohoCRM scopes ({crm.text[:150]})")
 
     mail = requests.get(f"{ep['mail']}/api/accounts", headers=zoho_hdr, timeout=TIMEOUT)
+    account_id = None
     if mail.status_code == 200:
         try:
             acct = mail.json().get("data", [{}])[0]
-            print(f"  Mail: OK (accountId {acct.get('accountId')}, "
+            account_id = acct.get("accountId")
+            print(f"  Mail: OK (accountId {account_id}, "
                   f"primary {acct.get('primaryEmailAddress')})")
         except (ValueError, IndexError, AttributeError):
             print("  Mail: HTTP 200")
     else:
         print(f"  Mail: HTTP {mail.status_code} — check ZohoMail scopes ({mail.text[:150]})")
+
+    # Mail READ is a new scope (2026-07-25). Verify it here so a missing scope is
+    # caught now, while the console is still open, and not at 7am by the triage agent.
+    if account_id:
+        folders = requests.get(f"{ep['mail']}/api/accounts/{account_id}/folders",
+                               headers=zoho_hdr, timeout=TIMEOUT)
+        if folders.status_code == 200:
+            try:
+                names = [f.get("folderName") for f in (folders.json().get("data") or [])]
+                print(f"  Mail READ: OK (folders visible: {', '.join(n for n in names if n)[:120]})")
+            except ValueError:
+                print("  Mail READ: OK")
+        else:
+            print(f"  Mail READ: HTTP {folders.status_code} — the scope line above must "
+                  f"include ZohoMail.messages.READ and ZohoMail.folders.READ "
+                  f"({folders.text[:120]})")
 
     cliq = requests.get(f"{ep['cliq']}/api/v2/channels", headers=bearer_hdr,
                         params={"limit": 100}, timeout=TIMEOUT)

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Ollama environment, made durable.
+
+       Ollama runs as its own Homebrew LaunchAgent and does NOT inherit shell
+       exports, so `export OLLAMA_...` in a terminal reaches nothing. The
+       working mechanism is `launchctl setenv`, but that is session-scoped and
+       vanishes on reboot. This agent re-applies the settings at every login and
+       restarts Ollama so it picks them up. Runs once and exits.
+
+       OLLAMA_CONTEXT_LENGTH  16384  no silent 4096 truncation of long documents
+       OLLAMA_MAX_LOADED_MODELS   2  room for the workhorse plus one A/B model
+       OLLAMA_NUM_PARALLEL        1  memory multiplies with this. Leave it at 1.
+       OLLAMA_KEEP_ALIVE        24h  the workhorse stays resident between turns
+  -->
+  <key>Label</key>
+  <string>com.khavion.ollamaenv</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/deploy/ollama_env.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__REPO__/data/runs/ollamaenv.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/data/runs/ollamaenv.err.log</string>
+</dict>
+</plist>

@@ -5,14 +5,25 @@ active: ollama
 
 ollama:
   base_url: http://127.0.0.1:11434
-  model: llama3.1:8b
-  # Ollama's server default num_ctx is 4096 (verified 2026-07-24); we set it
-  # explicitly because drafting context (brain files + record) exceeds that.
-  num_ctx: 8192
+  # The workhorse. Every agent shares this one resident model; nothing swaps
+  # models per agent, because a swap costs 3-10s and risks pushing 16 GB into
+  # swap where throughput collapses. Resident cost is ~1.3-1.5x the 6.6 GB tag.
+  model: qwen3.5:latest
+  # Ollama's server default is 4096 REGARDLESS of the model's advertised
+  # context (verified 2026-07-25 on this Mini). Long solicitations were being
+  # truncated before the model saw them; that is the likely source of the
+  # classifier's false negatives. Set explicitly here AND in the environment
+  # (deploy/com.khavion.ollamaenv.plist) so nothing silently falls back.
+  num_ctx: 16384
   temperature: 0.4
-  keep_alive: 10m
-  timeout_seconds: 180
+  # This model has a thinking mode. Off: reasoning traces must never reach a
+  # draft, and the provider strips <think> blocks defensively as well.
+  think: false
+  # Keep the workhorse resident between agent turns; reloading is the slow part.
+  keep_alive: 24h
+  timeout_seconds: 300
 
 hosted:
   # Stub. providers/hosted.py raises NotImplementedError by design.
+  # Not a cost decision to revisit casually: everything here is free and local.
   model: null
