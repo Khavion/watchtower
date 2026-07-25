@@ -101,3 +101,26 @@ Keychain read may pop an "Allow?" dialog once — run
 `run` fetch now · `status` caps/pause state · `pause`/`resume` ·
 `score <id>` breakdown · `approve|reject <id>` mark a record ·
 `block <domain>` add to the employer blocklist (never echoed anywhere).
+
+## HARD CONSTRAINT — free, local, Mac Mini only (owner directive, 2026-07-25)
+
+**Never recommend or build anything that costs money or runs off the Mac Mini.**
+Zohaib was explicit and emphatic: all agents run FREE and LOCAL on the Mac Mini
+via Ollama. Full stop.
+
+Specifically banned from recommendations unless he asks first:
+- Paid API models (Anthropic/OpenAI/Google API keys), paid subscriptions,
+  paid tiers of anything (Zoho upgrades, Buffer, Clay, sequencers, n8n cloud).
+- Cloud execution of agents: Claude Routines/cloud sessions, hosted agent
+  platforms, anything that runs when the Mini is off. If the Mini is off, the
+  work waits.
+- "Use X instead" answers that leave the local Ollama stack.
+
+The correct answer shape is always: **what can this Mac Mini do, for free,
+with Ollama, right now** — and if a local approach is weaker than a paid one,
+build the local one anyway and say plainly where it falls short. He upgrades
+only when he decides a limit is actually hurting, never preemptively.
+
+Design consequence he asked for directly: multiple agents, running at
+different times, TAKING TURNS with the 16 GB rather than running at once.
+Treat memory as the scheduling resource.
