@@ -51,6 +51,16 @@ esbd:
     re-timestamping reorders old records: read several pages, select on posting
     date, never diff page 1.
   max_pages_per_run: 10
+  # Detail pages are fetched only for rows passing the title prefilter, within
+  # this budget, and never for already-stored dedupe keys.
+  detail_budget_per_run: 15
+  # Broad net deciding which rows earn a detail fetch (title-only match);
+  # the strict keep/drop filter below runs on full detail text + NIGP.
+  title_prefilter_keywords: [software, technology, cloud, data, system, network,
+                             computer, digital, telecom, cyber, security, consult,
+                             managed services, hosting, analytics, intelligence,
+                             automation, modernization, erp, crm, portal, web,
+                             application, information]
   # NIGP class prefixes of interest (data processing / software / consulting
   # families). Local filter only; refined during adapter build.
   nigp_class_prefixes: ["204", "208", "209", "918", "920", "946", "958", "961", "962"]
