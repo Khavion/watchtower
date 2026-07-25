@@ -174,7 +174,7 @@ def run_enrichment(client: ApolloClient | None = None,
 
     summary = {"pages": 0, "people_seen": 0, "orgs_considered": 0,
                "firewall_dropped": 0, "recently_seen": 0, "disqualified": 0,
-               "enriched": 0, "saved": 0, "credits_spent": 0}
+               "enriched": 0, "saved": 0, "credits_spent": 0, "saved_domains": []}
 
     # Search is free; collect candidate orgs with their best buyer.
     candidates: dict[str, dict] = {}
@@ -261,6 +261,7 @@ def run_enrichment(client: ApolloClient | None = None,
         )
         storage.save(storage.account_path(domain), account.model_dump())
         summary["saved"] += 1
+        summary["saved_domains"].append(domain)
 
     log.info("enrich summary: %s", summary)
     return summary
