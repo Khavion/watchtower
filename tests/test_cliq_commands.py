@@ -70,6 +70,24 @@ def test_score_command_reports_breakdown(tmp_path, monkeypatch):
     assert any("total 72" in p and "GO" in p for p in cliq.posts)
 
 
+def test_block_command_appends_and_firewall_reloads(tmp_path, monkeypatch):
+    from pipeline import firewall as fw
+    monkeypatch.setattr(fw, "BLOCKLIST_PATH", tmp_path / "blocklist.local.md")
+    monkeypatch.setattr(fw, "_instance", None)
+    cliq = FakeCliq()
+
+    assert parse_command("block evilcorp.com") == ("block", "evilcorp.com")
+    _dispatch_command("block", "evilcorp.com", cliq)
+
+    assert fw.get_firewall().check_domain("app.evilcorp.com") == "EMPLOYER_ACCOUNT"
+    # The ack never echoes the blocked domain.
+    assert all("evilcorp" not in p for p in cliq.posts)
+
+    _dispatch_command("block", "not a domain!!", cliq)
+    assert any("nothing was blocked" in p for p in cliq.posts)
+    monkeypatch.setattr(fw, "_instance", None)
+
+
 def test_approve_marks_record_never_sends(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "STATE_PATH", tmp_path / "state.json")
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path)

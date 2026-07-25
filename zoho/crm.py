@@ -29,9 +29,25 @@ class ZohoCRMError(Exception):
 
 
 def description_block(payload: dict) -> str:
-    """The machine-regular record block embedded in Description."""
-    return ("--- watchtower record (do not edit below) ---\n"
-            + json.dumps(payload, indent=2, sort_keys=True, default=str)[:30000])
+    """Human-readable summary first (that is what the CRM card shows), then the
+    machine-regular block."""
+    lines = []
+    if payload.get("score_total") is not None:
+        lines.append(f"SCORE {payload['score_total']}/100 "
+                     f"(rubric {payload.get('rubric_version', '?')})")
+    if payload.get("gonogo_verdict"):
+        lines.append(f"GO/NO-GO: {payload['gonogo_verdict']}")
+    if payload.get("triggers"):
+        lines.append("Triggers: " + "; ".join(
+            f"{k}: {v}" for k, v in payload["triggers"].items()))
+    if payload.get("draft_status"):
+        lines.append(f"Outreach draft: {payload['draft_status']} "
+                     "(sending is always manual, in Zoho Mail)")
+    if payload.get("hard_fails"):
+        lines.append("Hard fails: " + ", ".join(payload["hard_fails"]))
+    header = "\n".join(lines)
+    return (header + "\n\n--- watchtower record (do not edit below) ---\n"
+            + json.dumps(payload, indent=2, sort_keys=True, default=str)[:29000])
 
 
 class ZohoCRM:
@@ -62,6 +78,34 @@ class ZohoCRM:
         data = payload.get("data") or []
         return str(data[0]["id"]) if data else None
 
+    def _write_lead(self, fields: dict, existing_id: str | None) -> str:
+        """Insert or update. Zoho picklists vary per org; when it rejects one
+        field (INVALID_DATA with details.api_name) we drop that field and retry
+        so a strict picklist never sinks the whole record."""
+        max_drops = 4
+        for attempt in range(max_drops + 1):
+            if existing_id:
+                resp = self.auth.request("PUT", self._url("Leads"), self.auth.crm_headers,
+                                         json={"data": [{"id": existing_id, **fields}]})
+            else:
+                resp = self.auth.request("POST", self._url("Leads"), self.auth.crm_headers,
+                                         json={"data": [fields]})
+            try:
+                entry = (resp.json().get("data") or [{}])[0]
+            except (ValueError, AttributeError):
+                entry = {}
+            if resp.status_code < 400 and entry.get("code") in (None, "SUCCESS"):
+                return existing_id or str(entry["details"]["id"])
+            bad = (entry.get("details") or {}).get("api_name")
+            if attempt < max_drops and bad and bad in fields and bad != "Last_Name":
+                log.warning("crm: Zoho rejected field %s (%s); retrying without it",
+                            bad, entry.get("code"))
+                fields = {k: v for k, v in fields.items() if k != bad}
+                continue
+            raise ZohoCRMError(f"lead write rejected (HTTP {resp.status_code}): "
+                               f"{str(entry)[:300]}")
+        raise ZohoCRMError("lead write failed after dropping rejected fields")
+
     def upsert_lead(self, account: dict, record_block: dict) -> str:
         buyer = (account.get("buyer_name") or "Unknown Buyer").split()
         fields = {
@@ -70,26 +114,26 @@ class ZohoCRM:
             "First_Name": " ".join(buyer[:-1]) if len(buyer) > 1 else None,
             "Designation": account.get("buyer_title"),
             "Website": account.get("domain"),
-            "Industry": None,  # free-form industry strings break the picklist; keep in Description
-            "Lead_Source": None,
+            "Email": account.get("buyer_email"),
+            "Industry": account.get("industry"),
+            "No_of_Employees": account.get("employee_count"),
+            "Annual_Revenue": account.get("annual_revenue"),
+            "Phone": account.get("org_phone"),
+            "City": account.get("city"),
+            "State": account.get("state"),
+            "Lead_Source": "Khavion watchtower",
             "Description": description_block(record_block),
         }
-        if account.get("buyer_email"):
-            fields["Email"] = account["buyer_email"]
-        fields = {k: v for k, v in fields.items() if v is not None}
+        fields = {k: v for k, v in fields.items() if v not in (None, "")}
 
         existing = self.find_lead_by_domain(account.get("domain", ""))
-        if existing:
-            resp = self.auth.request("PUT", self._url("Leads"), self.auth.crm_headers,
-                                     json={"data": [{"id": existing, **fields}]})
-            self._check(resp, "lead update")
-            log.info("crm: lead updated for %s", account.get("domain"))
-            return existing
-        resp = self.auth.request("POST", self._url("Leads"), self.auth.crm_headers,
-                                 json={"data": [fields]})
-        payload = self._check(resp, "lead insert")
-        rec_id = str(payload["data"][0]["details"]["id"])
-        log.info("crm: lead created for %s", account.get("domain"))
+        if existing is None:
+            # Factually true at creation (nothing auto-sends, ever) and never
+            # touched on update so Zohaib's manual status edits survive.
+            fields["Lead_Status"] = "Not Contacted"
+        rec_id = self._write_lead(fields, existing)
+        log.info("crm: lead %s for %s", "updated" if existing else "created",
+                 account.get("domain"))
         return rec_id
 
     # ----- Deals (solicitations, dedupe on Deal_Name) -----

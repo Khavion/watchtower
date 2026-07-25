@@ -5,6 +5,10 @@ work: outbound prospects via Apollo, posted solicitations via public procurement
 sources. Outputs are a scored record in Zoho CRM and a draft email in Zoho Mail's
 Drafts folder — Zohaib reads and sends every email himself. Nothing auto-sends.
 
+> **Setting up the Mac Mini?** Clone this repo, open a Claude Code chat inside
+> the `watchtower` folder, and say **"continue mac mini development"** — the
+> runbook in `CLAUDE.md` takes it from there.
+
 Design rules (locked):
 
 - **Cron plus scripts.** No agent runtime. A failure produces a stack trace in

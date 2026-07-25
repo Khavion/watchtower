@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from datetime import datetime
@@ -143,6 +144,8 @@ def job_procurement_fetch(dry_run: bool = False, limit: int | None = None) -> di
     if _paused() and not dry_run:
         log.warning("run is PAUSED (cliq `resume` to continue); skipping fetch")
         return {"paused": True}
+    from pipeline import firewall as _fw
+    _fw.reset()  # long-lived daemon: pick up blocklist rows added since last run
     config.ensure_data_dirs()
     thresholds = brain.rubric()["thresholds"]
     caps_cfg = config.caps()
@@ -212,6 +215,8 @@ def job_apollo_enrich(dry_run: bool = False, limit: int | None = None) -> dict:
     if _paused() and not dry_run:
         log.warning("run is PAUSED; skipping enrichment")
         return {"paused": True}
+    from pipeline import firewall as _fw
+    _fw.reset()
     config.ensure_data_dirs()
     thresholds = brain.rubric()["thresholds"]
 
@@ -233,16 +238,19 @@ def job_apollo_enrich(dry_run: bool = False, limit: int | None = None) -> dict:
         account = storage.load(storage.account_path(domain)) or {}
         score = score_account(account)
         account["score"] = score.model_dump()
+        draft: dict = {"status": "BELOW_THRESHOLD"}
         if score.total >= thresholds.get("account_draft_min", 60):
             draft = draft_touch_one(account, gate=gate, apollo_client=client)
             account["draft"] = {k: v for k, v in draft.items() if k != "body"}
             if draft.get("status") in ("DRAFTED", "NO_EMAIL"):
                 drafted += 1
-                try:
-                    publish_account(account, account["score"], draft,
-                                    crm=services.get("crm"), mail=services.get("mail"))
-                except PublishBlocked:
-                    pass
+        # Every scored account lands in the CRM: the CRM is Zohaib's single
+        # window into what the agent found, drafted or not.
+        try:
+            publish_account(account, account["score"], draft,
+                            crm=services.get("crm"), mail=services.get("mail"))
+        except PublishBlocked:
+            pass
         storage.save(storage.account_path(domain), account)
 
     summary["drafted"] = drafted
@@ -308,6 +316,18 @@ def _dispatch_command(verb: str, arg: str | None, cliq) -> None:
     elif verb == "resume":
         st = state.load(); st["paused"] = False; state.save(st)
         cliq.post("resumed.")
+    elif verb == "block":
+        from pipeline import firewall as fw
+        domain = (arg or "").lower().strip()
+        if not re.match(r"^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$", domain):
+            cliq.post("that does not look like a domain (expected e.g. example.com); "
+                      "nothing was blocked.")
+            return
+        fw.append_block(domain)
+        # Deliberately no echo of the domain: blocklist contents stay out of
+        # logs and generated messages.
+        cliq.post("added to the local blocklist (EMPLOYER_ACCOUNT). That company "
+                  "will never be scored, drafted, or stored again on this machine.")
     elif verb in ("score", "approve", "reject"):
         record = storage.load(storage.solicitation_path(arg))
         if record is None:

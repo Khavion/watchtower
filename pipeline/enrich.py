@@ -282,12 +282,18 @@ def run_enrichment(client: ApolloClient | None = None,
         if funding:
             triggers["funding_recent"] = funding
 
+        revenue = org.get("annual_revenue") or org.get("organization_revenue")
         account = Account(
             domain=domain,
             company_name=org.get("name") or domain,
             apollo_org_id=str(org.get("id") or "") or None,
             employee_count=int(employees) if employees is not None else None,
             industry=org.get("industry"),
+            annual_revenue=float(revenue) if revenue else None,
+            org_phone=(org.get("phone") or org.get("sanitized_phone")),
+            city=org.get("city"),
+            state=org.get("state"),
+            linkedin_url=org.get("linkedin_url"),
             locations=[str(org.get("country") or "")] if org.get("country") else [],
             technologies=technologies,
             funding_stage=org.get("latest_funding_stage"),

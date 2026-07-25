@@ -50,6 +50,11 @@ class Account(BaseModel):
     apollo_org_id: str | None = None
     employee_count: int | None = None
     industry: str | None = None
+    annual_revenue: float | None = None
+    org_phone: str | None = None
+    city: str | None = None
+    state: str | None = None
+    linkedin_url: str | None = None
     locations: list[str] = Field(default_factory=list)
     technologies: list[str] = Field(default_factory=list)
     funding_stage: str | None = None

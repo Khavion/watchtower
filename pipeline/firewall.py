@@ -115,3 +115,29 @@ def get_firewall() -> EmployerFirewall:
     if _instance is None:
         _instance = EmployerFirewall()
     return _instance
+
+
+def reset() -> None:
+    """Drop the cached instance so the next get_firewall() re-reads the
+    blocklist (the daemon is long-lived; jobs call this at start, and the
+    Cliq `block` command calls it after appending)."""
+    global _instance
+    _instance = None
+
+
+def append_block(domain: str, reason_code: str = "EMPLOYER_ACCOUNT",
+                 path: Path | None = None) -> None:
+    """Append one row to the local blocklist (Cliq `block <domain>` command,
+    added at owner request 2026-07-25). Never logs or echoes the domain."""
+    target = path or BLOCKLIST_PATH
+    if not target.exists():
+        template = target.parent / "blocklist.template.md"
+        target.write_text(template.read_text() if template.exists() else
+                          "# Blocklist (LOCAL ONLY)\n\n"
+                          "| domain | parent_company | reason_code | date_added |\n"
+                          "|---|---|---|---|\n")
+    from datetime import date
+    with open(target, "a") as fh:
+        fh.write(f"| {domain.lower().strip()} | | {reason_code} | {date.today().isoformat()} |\n")
+    reset()
+    log.info("employer firewall: one row appended via block command (%s)", reason_code)

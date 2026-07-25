@@ -25,15 +25,16 @@ log = logging.getLogger(__name__)
 
 MARKER = "[watchtower]"
 
-# verb -> takes_argument
+# verb -> takes_argument. `block` was added at owner request 2026-07-25 so the
+# blocklist can be maintained without editing files.
 ALLOWED_VERBS: dict[str, bool] = {
     "run": False, "status": False, "pause": False, "resume": False,
-    "score": True, "approve": True, "reject": True,
+    "score": True, "approve": True, "reject": True, "block": True,
 }
 ID_RE = re.compile(r"^[A-Za-z0-9:._\-]{1,80}$")
 
 VALID_VERBS_REPLY = ("valid commands: run | status | pause | resume | "
-                     "score <id> | approve <id> | reject <id>")
+                     "score <id> | approve <id> | reject <id> | block <domain>")
 
 
 def parse_command(text: str) -> tuple[str, str | None] | None:

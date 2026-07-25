@@ -97,6 +97,13 @@ def test_publish_solicitation_records_verdict_verbatim(firewall):
 
 
 def test_description_block_shape():
-    text = description_block({"kind": "solicitation", "score_total": 70})
-    assert text.startswith("--- watchtower record")
+    text = description_block({"kind": "solicitation", "score_total": 70,
+                              "gonogo_verdict": "NO_GO", "rubric_version": "1.0.0",
+                              "draft_status": "DRAFTED"})
+    # Human-readable summary first (what the CRM card shows)...
+    assert text.startswith("SCORE 70/100")
+    assert "GO/NO-GO: NO_GO" in text.split("---")[0]
+    assert "manual" in text.split("---")[0]
+    # ...then the machine block.
+    assert "--- watchtower record" in text
     assert '"score_total": 70' in text
