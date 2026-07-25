@@ -114,6 +114,27 @@ def test_draft_cap_halts(tmp_path, firewall):
     assert provider.calls == 0
 
 
+def test_fabricated_hiring_claim_rejected_without_trigger(tmp_path, firewall):
+    """No hiring trigger observed -> a draft claiming 'noticed you are hiring'
+    must be rejected (added after live drafts invented job reqs)."""
+    from pipeline.draft_outreach import fabrication_check
+    no_trigger_account = {**ACCOUNT, "triggers": {}}
+    fabricated = "Ada, noticed GoodCo is hiring a Cloud Engineer. My guess: ..."
+    problems = fabrication_check(no_trigger_account, fabricated)
+    assert any("hiring" in p for p in problems)
+    # Funding language is equally off-limits without the funding trigger.
+    assert fabrication_check(no_trigger_account, "saw GoodCo closed a Series A round")
+    # With the trigger observed, the same language is fine.
+    assert fabrication_check(ACCOUNT, "saw GoodCo closed a Series A round") == []
+
+
+def test_no_trigger_account_gets_stack_instruction(tmp_path, firewall):
+    from pipeline.draft_outreach import NO_TRIGGER_INSTRUCTION, _pick_variant, _sequence_block
+    assert _pick_variant({**ACCOUNT, "triggers": {}}) is None
+    assert _sequence_block(None) == NO_TRIGGER_INSTRUCTION
+    assert _pick_variant(ACCOUNT) == "A"
+
+
 def test_unverified_numeric_claim_rejected(tmp_path, firewall):
     invented = GOOD_DRAFT.replace("20 to 70%", "20 to 70%") + "\nWe served 500 clients."
     provider = ScriptedProvider([invented, GOOD_DRAFT])

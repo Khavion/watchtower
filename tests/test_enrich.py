@@ -1,5 +1,7 @@
-"""Enrichment: firewall short-circuit, 30-day idempotency, cap halts, credit economy."""
+"""Enrichment against the real (redacted) 2026 api_search shape:
+pre-credit firewall/idempotency, 1-credit match, post-match checks, cap halts."""
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -12,45 +14,61 @@ from pipeline.firewall import EmployerFirewall
 BLOCKLIST = """| domain | parent_company | reason_code | date_added |
 |---|---|---|---|
 | blocked-corp.com | Blocked Corp | EMPLOYER_ACCOUNT | 2026-07-24 |
+| hidden-block.com | | EMPLOYER_ADJACENT | 2026-07-24 |
 """
 
+# What api_search ACTUALLY returns (verified live 2026-07-24): redacted people.
 SEARCH_PAGE = {
+    "total_entries": 4,
     "people": [
-        {"id": "p1", "name": "Ada CTO", "title": "CTO", "seniority": "c_suite",
-         "email_status": "verified",
-         "organization": {"id": "o1", "name": "GoodCo", "primary_domain": "goodco.com",
+        {"id": "p1", "first_name": "Ada", "title": "CTO", "has_email": True,
+         "organization": {"name": "GoodCo"}},
+        {"id": "p2", "first_name": "Bob", "title": "VP of Engineering", "has_email": True,
+         "organization": {"name": "Blocked Corp"}},
+        {"id": "p3", "first_name": "Cara", "title": "Director of Engineering", "has_email": True,
+         "organization": {"name": "StaffCo"}},
+        {"id": "p4", "first_name": "Dan", "title": "Head of Platform", "has_email": True,
+         "organization": {"name": "SneakyCo"}},
+        {"id": "p5", "first_name": "Eve", "title": "Marketing Manager", "has_email": True,
+         "organization": {"name": "IrrelevantCo"}},
+    ],
+}
+
+MATCHES = {
+    "p1": {"person": {"id": "p1", "name": "Ada Lovelace", "title": "CTO",
+                      "seniority": "c_suite", "email": "ada@goodco.com",
+                      "email_status": "verified",
+                      "organization": {
+                          "id": "o1", "name": "GoodCo", "primary_domain": "goodco.com",
                           "estimated_num_employees": 80, "industry": "software",
-                          "country": "United States"}},
-        {"id": "p2", "name": "Bob VP", "title": "VP of Engineering", "seniority": "vp",
-         "email_status": "verified",
-         "organization": {"id": "o2", "name": "Blocked Corp", "primary_domain": "blocked-corp.com",
-                          "estimated_num_employees": 90}},
-        {"id": "p3", "name": "Cara Dir", "title": "Director of Engineering",
-         "email_status": "unverified",
-         "organization": {"id": "o3", "name": "StaffCo", "primary_domain": "staffco.com",
-                          "estimated_num_employees": 50,
-                          "short_description": "A staffing and recruiting agency."}},
-        {"id": "p4", "name": "Dan Head", "title": "Head of Platform",
-         "email_status": "verified",
-         "organization": {"id": "o4", "name": "SeenCo", "primary_domain": "seenco.com",
-                          "estimated_num_employees": 40}},
-    ]
+                          "country": "United States",
+                          "technology_names": ["Amazon AWS", "Kubernetes"],
+                          "latest_funding_stage": "Series A",
+                          "latest_funding_round_date":
+                              (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()}}},
+    "p3": {"person": {"id": "p3", "name": "Cara Dir", "title": "Director of Engineering",
+                      "email": "cara@staffco.com", "email_status": "verified",
+                      "organization": {"name": "StaffCo", "primary_domain": "staffco.com",
+                                       "estimated_num_employees": 50,
+                                       "short_description": "A staffing and recruiting agency."}}},
+    "p4": {"person": {"id": "p4", "name": "Dan Head", "title": "Head of Platform",
+                      "email": "dan@hidden-block.com", "email_status": "verified",
+                      "organization": {"name": "SneakyCo",
+                                       "primary_domain": "hidden-block.com",
+                                       "estimated_num_employees": 60}}},
 }
 
 
 class FakeApollo:
     def __init__(self):
-        self.enrich_calls = []
+        self.match_calls = []
 
     def people_api_search(self, filters, page=1):
         return SEARCH_PAGE if page == 1 else {"people": []}
 
-    def org_enrich(self, domain):
-        self.enrich_calls.append(domain)
-        return {"organization": {"latest_funding_stage": "Series A",
-                                 "latest_funding_round_date":
-                                     (datetime.now(timezone.utc) - timedelta(days=30)).isoformat(),
-                                 "technology_names": ["Amazon AWS", "Kubernetes"]}}
+    def people_match(self, person_id=None, **kw):
+        self.match_calls.append(person_id)
+        return MATCHES.get(person_id, {"person": {}})
 
 
 @pytest.fixture
@@ -74,18 +92,33 @@ def _gate(tmp_path, monthly=100, per_run=25):
                    state_path=tmp_path / "state.json")
 
 
-def test_blocklisted_account_never_stored_or_enriched(data_dir, firewall, tmp_path, caplog):
-    import logging
+def test_company_name_blocked_before_any_credit(data_dir, firewall, tmp_path, caplog):
     client = FakeApollo()
     with caplog.at_level(logging.INFO):
         summary = run_enrichment(client=client, gate=_gate(tmp_path), firewall=firewall,
                                  min_days_between=30)
-    assert summary["firewall_dropped"] == 1
-    assert "blocked-corp.com" not in client.enrich_calls
-    assert not storage.account_path("blocked-corp.com").exists()
-    # Reason code logged, contents never echoed.
+    # "Blocked Corp" is dropped from the candidate list pre-match: no credit.
+    assert "p2" not in client.match_calls
+    assert summary["firewall_dropped"] >= 1
     joined = " ".join(r.getMessage() for r in caplog.records)
-    assert "EMPLOYER_ACCOUNT" in joined and "blocked-corp" not in joined
+    assert "EMPLOYER_ACCOUNT" in joined and "Blocked Corp".lower() not in joined.lower()
+
+
+def test_domain_blocked_after_match_stores_nothing(data_dir, firewall, tmp_path):
+    client = FakeApollo()
+    run_enrichment(client=client, gate=_gate(tmp_path), firewall=firewall,
+                   min_days_between=30)
+    # SneakyCo's name is clean but its domain is blocklisted: credit spent,
+    # nothing stored.
+    assert "p4" in client.match_calls
+    assert not storage.account_path("hidden-block.com").exists()
+
+
+def test_non_buyer_titles_never_matched(data_dir, firewall, tmp_path):
+    client = FakeApollo()
+    run_enrichment(client=client, gate=_gate(tmp_path), firewall=firewall,
+                   min_days_between=30)
+    assert "p5" not in client.match_calls  # Marketing Manager is not a buyer
 
 
 def test_disqualifier_keywords_drop_staffing(data_dir, firewall, tmp_path):
@@ -96,28 +129,29 @@ def test_disqualifier_keywords_drop_staffing(data_dir, firewall, tmp_path):
     assert not storage.account_path("staffco.com").exists()
 
 
-def test_thirty_day_idempotency(data_dir, firewall, tmp_path):
-    recent = {"domain": "seenco.com", "company_name": "SeenCo",
+def test_recently_seen_by_name_skips_pre_credit(data_dir, firewall, tmp_path):
+    recent = {"domain": "goodco.com", "company_name": "GoodCo",
               "fetched_at": datetime.now(timezone.utc).isoformat()}
-    storage.save(storage.account_path("seenco.com"), recent)
+    storage.save(storage.account_path("goodco.com"), recent)
     client = FakeApollo()
     summary = run_enrichment(client=client, gate=_gate(tmp_path), firewall=firewall,
                              min_days_between=30)
-    assert summary["recently_seen"] == 1
-    assert "seenco.com" not in client.enrich_calls
+    assert "p1" not in client.match_calls
+    assert summary["recently_seen"] >= 1
 
 
-def test_happy_path_saves_account_with_buyer_and_trigger(data_dir, firewall, tmp_path):
+def test_happy_path_saves_account_with_email_and_trigger(data_dir, firewall, tmp_path):
     client = FakeApollo()
     summary = run_enrichment(client=client, gate=_gate(tmp_path), firewall=firewall,
                              min_days_between=30)
     saved = storage.load(storage.account_path("goodco.com"))
     assert saved is not None
     assert saved["buyer_title"] == "CTO"
-    assert saved["buyer_email"] is None  # email reveal deferred to draft time
+    assert saved["buyer_email"] == "ada@goodco.com"  # match includes the reveal
+    assert saved["buyer_email_status"] == "verified"
     assert saved["funding_stage"] == "Series A"
     assert "funding_recent" in saved["triggers"]
-    assert summary["credits_spent"] == len(client.enrich_calls)
+    assert summary["credits_spent"] == len(client.match_calls)
 
 
 def test_unconfigured_cap_blocks_enrichment(data_dir, firewall, tmp_path):
@@ -125,15 +159,21 @@ def test_unconfigured_cap_blocks_enrichment(data_dir, firewall, tmp_path):
     summary = run_enrichment(client=client, gate=_gate(tmp_path, monthly=0),
                              firewall=firewall, min_days_between=30)
     assert "halted" in summary
-    assert client.enrich_calls == []  # nothing spent
+    assert client.match_calls == []
 
 
 def test_monthly_cap_halts_loudly(data_dir, firewall, tmp_path, caplog):
-    gate = _gate(tmp_path, monthly=1)
     client = FakeApollo()
-    summary = run_enrichment(client=client, gate=gate, firewall=firewall,
-                             min_days_between=30)
-    # Two eligible orgs but only 1 credit of monthly budget: halt after the first.
+    with caplog.at_level(logging.ERROR):
+        summary = run_enrichment(client=client, gate=_gate(tmp_path, monthly=1),
+                                 firewall=firewall, min_days_between=30)
     assert summary["credits_spent"] == 1
     assert "halted" in summary
     assert any("cap" in r.message.lower() for r in caplog.records)
+
+
+def test_match_budget_limits_run(data_dir, firewall, tmp_path):
+    client = FakeApollo()
+    summary = run_enrichment(client=client, gate=_gate(tmp_path), firewall=firewall,
+                             min_days_between=30, match_budget=1)
+    assert summary["matched"] == 1

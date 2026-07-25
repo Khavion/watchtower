@@ -1,17 +1,21 @@
 """Apollo enrichment: pull ICP-matching prospects, spend as little as possible.
 
-Credit economy (verified against docs.apollo.io 2026-07-24):
-- POST /api/v1/mixed_people/api_search: 0 credits, master key required,
-  returns people + organization but NO emails.
-- GET  /api/v1/organizations/enrich: 1 credit per matched org (funding stage
-  confirmation — search has no Series A/B filter).
-- POST /api/v1/people/match: 1 credit (email reveal) — called at DRAFT time
-  by draft_outreach, never here, so a scored-but-undrafted account costs at
-  most 1 credit total.
+Verified LIVE 2026-07-24 (the docs understate this): POST /mixed_people/api_search
+(0 credits, master key) returns a heavily REDACTED shape - person carries only
+id/title/first_name/has_email booleans, organization only its name. No domain,
+no headcount, no email status. The full person + organization (including the
+email) come from POST /people/match at 1 credit. Search filters do bind
+(verified by probe: bogus technology uid -> 0 results), so every search hit
+already satisfies employee range, US, and AWS/Kubernetes usage.
 
-Order of operations per candidate: firewall first (blocked domains are
-dropped before anything is stored or any further API call is made), then the
-30-day idempotency check, then the paid enrichment call.
+Flow, ordered for credit economy:
+  1. api_search (free) -> rank people by buyer-title priority, one per company.
+  2. Pre-credit drops: company-name firewall check, recently-seen-by-name.
+  3. people/match (1 credit) -> full person + org + email in one call.
+  4. Post-match checks: domain firewall (nothing stored/transmitted on a hit;
+     the credit is already spent - unavoidable given the redacted search),
+     30-day idempotency by domain, ICP disqualifiers, headcount confirmation.
+  5. Save the account. Caps halt loudly at every paid step.
 """
 
 from __future__ import annotations
@@ -83,10 +87,6 @@ class ApolloClient:
         return self._request("POST", f"{self.BASE}/mixed_people/api_search",
                              json=payload).json()
 
-    def org_enrich(self, domain: str) -> dict:
-        return self._request("GET", f"{self.BASE}/organizations/enrich",
-                             params={"domain": domain}).json()
-
     def people_match(self, person_id: str | None = None, **identifiers) -> dict:
         payload = {"reveal_personal_emails": False, "reveal_phone_number": False,
                    **identifiers}
@@ -94,23 +94,22 @@ class ApolloClient:
             payload["id"] = person_id
         return self._request("POST", f"{self.BASE}/people/match", json=payload).json()
 
+    def org_enrich(self, domain: str) -> dict:
+        return self._request("GET", f"{self.BASE}/organizations/enrich",
+                             params={"domain": domain}).json()
+
     def supported_technologies_csv(self) -> str:
+        # NOTE: this CSV lists display names ("Amazon AWS"), not filter uids.
+        # Filter-uid validity is checked empirically (bogus uid -> 0 results).
         return self._request("GET", "https://api.apollo.io/v1/auth/supported_technologies_csv").text
 
 
-def _best_person(people: list[dict]) -> dict | None:
-    def rank(p):
-        title = (p.get("title") or "").lower()
-        for i, t in enumerate(TITLE_PRIORITY):
-            if t in title:
-                return i
-        return len(TITLE_PRIORITY)
-    matched = sorted(people, key=rank)
-    return matched[0] if matched else None
-
-
-def _org_of(person: dict) -> dict:
-    return person.get("organization") or person.get("account") or {}
+def _title_rank(title: str | None) -> int:
+    lowered = (title or "").lower()
+    for i, t in enumerate(TITLE_PRIORITY):
+        if t in lowered:
+            return i
+    return len(TITLE_PRIORITY)
 
 
 def _domain_of(org: dict) -> str | None:
@@ -122,9 +121,8 @@ def _domain_of(org: dict) -> str | None:
     return domain
 
 
-def _funding_trigger(enriched_org: dict) -> str | None:
-    raw = (enriched_org.get("latest_funding_round_date")
-           or enriched_org.get("latest_funding_date"))
+def _funding_trigger(org: dict) -> str | None:
+    raw = org.get("latest_funding_round_date") or org.get("latest_funding_date")
     if not raw:
         return None
     try:
@@ -132,12 +130,12 @@ def _funding_trigger(enriched_org: dict) -> str | None:
     except ValueError:
         return None
     if date.today() - when <= timedelta(days=180):
-        stage = enriched_org.get("latest_funding_stage") or "funding round"
+        stage = org.get("latest_funding_stage") or "funding round"
         return f"{stage} closed {when.isoformat()}"
     return None
 
 
-def _recently_seen(domain: str, min_days: int) -> bool:
+def _recently_seen_domain(domain: str, min_days: int) -> bool:
     existing = storage.load(storage.account_path(domain))
     if not existing:
         return False
@@ -148,6 +146,23 @@ def _recently_seen(domain: str, min_days: int) -> bool:
     if fetched.tzinfo is None:
         fetched = fetched.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - fetched).days < min_days
+
+
+def _recent_company_names(min_days: int) -> set[str]:
+    """Company names of accounts touched within the window - the only pre-credit
+    idempotency signal available, since search results carry no domain."""
+    names = set()
+    now = datetime.now(timezone.utc)
+    for rec in storage.iter_records("accounts"):
+        try:
+            fetched = datetime.fromisoformat(rec["fetched_at"])
+            if fetched.tzinfo is None:
+                fetched = fetched.replace(tzinfo=timezone.utc)
+        except (KeyError, ValueError):
+            continue
+        if (now - fetched).days < min_days and rec.get("company_name"):
+            names.add(rec["company_name"].lower())
+    return names
 
 
 def _disqualified(org: dict, keywords: list[str]) -> bool:
@@ -161,7 +176,8 @@ def run_enrichment(client: ApolloClient | None = None,
                    firewall: EmployerFirewall | None = None,
                    pages: int = 1,
                    min_days_between: int | None = None,
-                   dry_run: bool = False) -> dict:
+                   dry_run: bool = False,
+                   match_budget: int | None = None) -> dict:
     """One enrichment pass. Returns a summary dict for the run log."""
     client = client or ApolloClient()
     gate = gate or CapGate()
@@ -172,69 +188,95 @@ def run_enrichment(client: ApolloClient | None = None,
         from pipeline.config import caps
         min_days_between = int(caps().get("accounts", {}).get("min_days_between_touches", 30))
 
-    summary = {"pages": 0, "people_seen": 0, "orgs_considered": 0,
+    summary = {"pages": 0, "people_seen": 0, "candidates": 0,
                "firewall_dropped": 0, "recently_seen": 0, "disqualified": 0,
-               "enriched": 0, "saved": 0, "credits_spent": 0, "saved_domains": []}
+               "out_of_icp": 0, "matched": 0, "saved": 0, "credits_spent": 0,
+               "saved_domains": []}
 
-    # Search is free; collect candidate orgs with their best buyer.
-    candidates: dict[str, dict] = {}
+    # Free discovery: rank buyers, one candidate per company name.
+    people: list[dict] = []
     for page in range(1, pages + 1):
         payload = client.people_api_search(filters, page=page)
-        people = payload.get("people") or payload.get("contacts") or []
+        batch = payload.get("people") or []
         summary["pages"] += 1
-        summary["people_seen"] += len(people)
-        by_org: dict[str, list[dict]] = {}
-        for person in people:
-            domain = _domain_of(_org_of(person))
-            if domain:
-                by_org.setdefault(domain, []).append(person)
-        for domain, people_at_org in by_org.items():
-            if domain not in candidates:
-                candidates[domain] = {"people": people_at_org,
-                                      "org": _org_of(people_at_org[0])}
-        if not people:
+        summary["people_seen"] += len(batch)
+        people.extend(batch)
+        if not batch:
             break
 
-    for domain, bundle in candidates.items():
-        summary["orgs_considered"] += 1
-
-        # Firewall first: no storage, no further transmission, reason code only.
-        code = firewall.check_domain(domain) or firewall.check_company(
-            bundle["org"].get("name"))
+    people.sort(key=lambda p: _title_rank(p.get("title")))
+    recent_names = _recent_company_names(min_days_between)
+    seen_names: set[str] = set()
+    candidates: list[dict] = []
+    for person in people:
+        if _title_rank(person.get("title")) >= len(TITLE_PRIORITY):
+            continue
+        org_name = ((person.get("organization") or {}).get("name") or "").strip()
+        if not org_name or org_name.lower() in seen_names:
+            continue
+        seen_names.add(org_name.lower())
+        code = firewall.check_company(org_name)
         if code:
             summary["firewall_dropped"] += 1
-            log.info("enrich: candidate dropped by employer firewall (%s)", code)
+            log.info("enrich: candidate dropped by employer firewall pre-match (%s)", code)
             continue
-
-        if _recently_seen(domain, min_days_between):
+        if org_name.lower() in recent_names:
             summary["recently_seen"] += 1
             continue
+        candidates.append(person)
+    summary["candidates"] = len(candidates)
 
-        if _disqualified(bundle["org"], disqualifiers):
-            summary["disqualified"] += 1
-            continue
+    if dry_run:
+        summary["dry_run"] = True
+        log.info("enrich (dry run) summary: %s", summary)
+        return summary
 
-        person = _best_person(bundle["people"])
-        if person is None:
-            continue
-
-        if dry_run:
-            summary["saved"] += 1
-            continue
-
-        # Paid step: 1 credit for org enrichment (funding-stage confirmation).
+    for person in candidates:
+        if match_budget is not None and summary["matched"] >= match_budget:
+            log.info("enrich: match budget (%d) reached for this run", match_budget)
+            break
+        # Paid step: 1 credit buys the full person + organization + email.
         try:
             gate.check_apollo_budget(planned_credits=1, run_spent=summary["credits_spent"])
         except CapExceeded as exc:
             log.error("enrich: %s", exc)
             summary["halted"] = str(exc)
             break
-        enriched = (client.org_enrich(domain) or {}).get("organization") or {}
+        matched = client.people_match(person_id=person.get("id")) or {}
         gate.record_apollo_credits(1)
         summary["credits_spent"] += 1
-        summary["enriched"] += 1
+        summary["matched"] += 1
 
-        org = {**bundle["org"], **enriched}
+        full = matched.get("person") or {}
+        org = full.get("organization") or {}
+        domain = _domain_of(org)
+        if not domain:
+            continue
+
+        code = firewall.check_domain(domain) or firewall.check_company(org.get("name"))
+        if code:
+            # Credit already spent (search hides domains); still: store nothing,
+            # transmit nothing further, reason code only.
+            summary["firewall_dropped"] += 1
+            log.info("enrich: matched candidate dropped by employer firewall (%s)", code)
+            continue
+        if _recently_seen_domain(domain, min_days_between):
+            summary["recently_seen"] += 1
+            continue
+        if _disqualified(org, disqualifiers):
+            summary["disqualified"] += 1
+            continue
+        employees = org.get("estimated_num_employees")
+        if employees is not None and not (20 <= int(employees) <= 200):
+            summary["out_of_icp"] += 1
+            continue
+
+        technologies = [t for t in (org.get("technology_names") or [])][:40]
+        if not technologies:
+            # The search filter guaranteed AWS/Kubernetes usage; record that
+            # provenance honestly rather than losing the signal.
+            technologies = ["Amazon AWS (via search filter)", "Kubernetes (via search filter)"]
+
         triggers: dict[str, str] = {}
         funding = _funding_trigger(org)
         if funding:
@@ -244,19 +286,18 @@ def run_enrichment(client: ApolloClient | None = None,
             domain=domain,
             company_name=org.get("name") or domain,
             apollo_org_id=str(org.get("id") or "") or None,
-            employee_count=org.get("estimated_num_employees"),
+            employee_count=int(employees) if employees is not None else None,
             industry=org.get("industry"),
             locations=[str(org.get("country") or "")] if org.get("country") else [],
-            technologies=[t for t in (org.get("technology_names") or [])][:40],
+            technologies=technologies,
             funding_stage=org.get("latest_funding_stage"),
-            latest_funding_date=None,
             triggers=triggers,
-            buyer_name=person.get("name"),
-            buyer_title=person.get("title"),
-            buyer_seniority=person.get("seniority"),
-            buyer_apollo_id=str(person.get("id") or "") or None,
-            buyer_email=None,  # revealed only at draft time (1 credit)
-            buyer_email_status=person.get("email_status"),
+            buyer_name=full.get("name") or person.get("first_name"),
+            buyer_title=full.get("title") or person.get("title"),
+            buyer_seniority=full.get("seniority"),
+            buyer_apollo_id=str(full.get("id") or person.get("id") or "") or None,
+            buyer_email=(full.get("email") if "not_unlocked" not in str(full.get("email")) else None),
+            buyer_email_status=full.get("email_status"),
             raw={"org_keys": sorted(org.keys())[:60]},
         )
         storage.save(storage.account_path(domain), account.model_dump())

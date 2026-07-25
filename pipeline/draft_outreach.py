@@ -37,6 +37,12 @@ SYSTEM_TEMPLATE = """You draft ONE cold outreach email (touch one of three) for 
 Zohaib Khawaja, owner of Khavion, a solo AI and cloud consulting practice in \
 Houston. You write in his voice per the VOICE RULES below. Hard rules:
 - Lead with the observation about the prospect, never an introduction.
+- The "Observed triggers" list in the data is the ONLY set of events you may \
+reference. If it says "none observed", ground the observation purely in their \
+listed technology stack. NEVER claim they are hiring, raised funding, made an \
+announcement, or changed leadership unless that exact trigger is listed.
+- A spend hypothesis is an explicit guess ("my guess:"), never a fake fact: \
+do not state node counts, budgets, or metrics as if you measured them.
 - One ask only: the free 30-minute cloud architecture review.
 - Under {max_words} words in the body. Short sentences. No em-dashes.
 - Use ONLY the verified proof points provided, with their attribution kept \
@@ -89,14 +95,23 @@ def _proof_lines(verified: list[dict]) -> str:
                      for p in verified)
 
 
-def _pick_variant(account: dict) -> str:
+def _pick_variant(account: dict) -> str | None:
     for trigger in account.get("triggers") or {}:
         if trigger in VARIANT_BY_TRIGGER:
             return VARIANT_BY_TRIGGER[trigger]
-    return "B" if account.get("technologies") else "A"
+    return None  # no observed trigger: no event template, stack-grounded instead
 
 
-def _sequence_block(variant: str) -> str:
+NO_TRIGGER_INSTRUCTION = """NO TRIGGER WAS OBSERVED for this account. Do NOT \
+use an event-based opener. Ground the observation in their technology stack \
+from the data (e.g. running AWS and Kubernetes at their headcount) and the \
+cost/architecture implication of that stack at their size. The hypothesis is \
+about what their stack usually costs teams like them, stated as a guess."""
+
+
+def _sequence_block(variant: str | None) -> str:
+    if variant is None:
+        return NO_TRIGGER_INSTRUCTION
     text = brain.read("sequences.md")
     m = re.search(rf"## Variant {variant}.*?(?=\n## Variant |\n## Cadence)", text, re.DOTALL)
     return m.group(0) if m else text[:2000]
@@ -108,6 +123,46 @@ def _parse_output(raw: str) -> tuple[str, str]:
     body = raw[m.end():].strip() if m else raw.strip()
     body = re.sub(r"^\s*\n", "", body)
     return subject, body
+
+
+# Event-classes a draft may only reference when the matching trigger was
+# actually observed. Deterministic anti-fabrication: the model cannot "notice"
+# things that are not in the record. (Added after live drafts invented job
+# reqs for trigger-less accounts, 2026-07-24.)
+FABRICATION_PATTERNS = {
+    "funding_recent": re.compile(
+        r"clos(?:ed|e[sd]?) .{0,30}(round|funding)|post[- ]?(raise|funding)|"
+        r"\braised\b|\bseries [ab]\b|angel (round|funding)|congrats on .{0,30}(round|raise|funding)",
+        re.IGNORECASE),
+    "hiring_platform": re.compile(
+        r"\bhiring\b|job (post|posting|req)|open (req|role|position)|new hire\b",
+        re.IGNORECASE),
+    "hiring_ai_ml": re.compile(
+        r"\bhiring\b|job (post|posting|req)|open (req|role|position)|new hire\b",
+        re.IGNORECASE),
+    "new_technical_exec": re.compile(
+        r"congrats on the new role|new (cto|vp)|first 90 days", re.IGNORECASE),
+    "cloud_migration": re.compile(
+        r"migration announcement|announc\w+ .{0,30}migrat|read that .{0,40}migrat",
+        re.IGNORECASE),
+}
+
+
+def fabrication_check(account: dict, text: str) -> list[str]:
+    """Reject references to trigger-events that were never observed."""
+    observed = set((account.get("triggers") or {}).keys())
+    hiring_observed = observed & {"hiring_platform", "hiring_ai_ml"}
+    problems = []
+    for trigger, pattern in FABRICATION_PATTERNS.items():
+        if trigger in observed:
+            continue
+        if trigger in ("hiring_platform", "hiring_ai_ml") and hiring_observed:
+            continue
+        m = pattern.search(text)
+        if m:
+            problems.append(f"fabricated observation ({trigger} not observed): "
+                            f"{m.group(0)[:60]!r}")
+    return problems
 
 
 def _unverified_claims(text: str, verified: list[dict]) -> list[str]:
@@ -170,7 +225,7 @@ def draft_touch_one(account: dict, provider: Provider | None = None,
         max_words=rules.get("max_words", 120),
         voice=brain.read("voice.md").split("## Banned")[0][:2500],
         proof=_proof_lines(verified),
-        variant=variant,
+        variant=variant or "stack-observation",
         sequence=_sequence_block(variant))
 
     trigger_lines = "\n".join(f"- {k}: {v}" for k, v in
@@ -200,8 +255,9 @@ def draft_touch_one(account: dict, provider: Provider | None = None,
             return {"status": "PROVIDER_DOWN", "reason": str(exc)}
 
         subject, body = _parse_output(raw)
-        violations = voice_check(subject, body) + _unverified_claims(
-            f"{subject}\n{body}", verified)
+        violations = (voice_check(subject, body)
+                      + _unverified_claims(f"{subject}\n{body}", verified)
+                      + fabrication_check(account, f"{subject}\n{body}"))
         try:
             firewall.assert_clean(f"{subject}\n{body}", stage="draft_outreach")
         except FirewallViolation as exc:
