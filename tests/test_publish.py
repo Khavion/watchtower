@@ -5,7 +5,7 @@ import pytest
 
 from pipeline.firewall import EmployerFirewall
 from pipeline.publish import PublishBlocked, publish_account, publish_solicitation
-from zoho.crm import description_block
+from zoho.crm import deal_description, lead_description
 
 BLOCKLIST = """| domain | parent_company | reason_code | date_added |
 |---|---|---|---|
@@ -96,14 +96,31 @@ def test_publish_solicitation_records_verdict_verbatim(firewall):
     assert "$500,000 performance bond" in str(block["disqualifiers"])
 
 
-def test_description_block_shape():
-    text = description_block({"kind": "solicitation", "score_total": 70,
-                              "gonogo_verdict": "NO_GO", "rubric_version": "1.0.0",
-                              "draft_status": "DRAFTED"})
-    # Human-readable summary first (what the CRM card shows)...
-    assert text.startswith("SCORE 70/100")
-    assert "GO/NO-GO: NO_GO" in text.split("---")[0]
-    assert "manual" in text.split("---")[0]
-    # ...then the machine block.
-    assert "--- watchtower record" in text
-    assert '"score_total": 70' in text
+def test_descriptions_are_plain_english_no_json():
+    """A non-technical VA reads these: plain sentences, no JSON, no jargon."""
+    lead_text = lead_description({
+        "score_total": 69, "fetched_at": "2026-07-24T12:00:00",
+        "score_breakdown": {"cloud_footprint": {"criterion_score": 100},
+                            "trigger_recency": {"criterion_score": 2}},
+        "triggers": {"funding_recent": "Angel closed 2026-02-01"},
+        "draft_status": "DRAFTED", "hard_fails": []})
+    assert "Score: 69 out of 100." in lead_text
+    assert "Buying signal: Angel closed 2026-02-01." in lead_text
+    assert "waiting in Zoho Mail Drafts" in lead_text
+    assert "cloud usage" in lead_text          # criterion translated to plain words
+    for techy in ("{", "}", '":', "icp_fit", "rubric", "DRAFTED"):
+        assert techy not in lead_text
+
+    deal_text = deal_description({
+        "score_total": 54, "gonogo_verdict": "NO_GO", "source": "esbd",
+        "url": "https://example.test/x", "estimated_hours": 20, "deadline_days": 10,
+        "disqualifiers": [{"kind": "bonding",
+                           "requirement_quote": "shall furnish a $500,000 performance bond"}],
+        "set_aside_text_verbatim": None, "incumbent": "Incumbent Corp"})
+    assert "Decision: NO GO. Skip this one." in deal_text
+    assert "a bond is required" in deal_text
+    assert '"shall furnish a $500,000 performance bond"' in deal_text
+    assert "Current contract holder: Incumbent Corp." in deal_text
+    assert "Nothing has been submitted." in deal_text
+    for techy in ("{", "}", "gonogo", "verdict", "NO_GO"):
+        assert techy not in deal_text

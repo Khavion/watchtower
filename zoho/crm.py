@@ -15,7 +15,6 @@ draft status vocabulary is DRAFTED/NO_EMAIL/DRAFT_FAILED, never "sent".
 
 from __future__ import annotations
 
-import json
 import logging
 from urllib.parse import quote
 
@@ -28,26 +27,129 @@ class ZohoCRMError(Exception):
     pass
 
 
-def description_block(payload: dict) -> str:
-    """Human-readable summary first (that is what the CRM card shows), then the
-    machine-regular block."""
+# CRM text is read by a non-technical VA: plain short English, no JSON, no
+# jargon. The machine-readable record lives in data/ on the machine; the CRM
+# never needs it.
+
+CRITERIA_PLAIN = {
+    "icp_fit": "company fit",
+    "cloud_footprint": "cloud usage",
+    "trigger_recency": "recent buying signal",
+    "buyer_seniority": "contact's seniority",
+    "contactability": "email quality",
+    "capability_match": "match to what Khavion sells",
+    "notice_type_fit": "type of notice",
+    "timeline_runway": "time to respond",
+    "agency_fit": "agency fit",
+}
+
+HARD_FAIL_PLAIN = {
+    "blocklist_hit": "this company is on the do-not-contact list",
+    "headcount_out_of_range": "company size is outside 20-200 people",
+    "no_reachable_buyer": "no reachable decision-maker",
+    "out_of_scope_boundaries": "asks for work Khavion does not sell",
+    "requires_onsite": "requires on-site work",
+    "requires_w2": "requires W-2 employment",
+    "requires_unheld_certification": "requires a certification Khavion does not hold",
+}
+
+DISQUALIFIER_PLAIN = {
+    "bonding": "a bond is required",
+    "insurance_minimum": "an insurance minimum is required",
+    "years_in_business": "requires more years in business",
+    "past_performance": "requires past performance references",
+    "onsite_required": "on-site work is required",
+    "w2_required": "W-2 employment is required",
+    "unheld_certification": "requires a certification Khavion does not hold",
+    "prebid_conference_passed": "the pre-bid meeting already happened",
+    "deadline_too_close": "the deadline is too close",
+    "not_yet_eligible": "needs federal past performance Khavion does not have yet",
+}
+
+DRAFT_STATUS_PLAIN = {
+    "DRAFTED": "An email draft is waiting in Zoho Mail Drafts. Nothing was sent.",
+    "NO_EMAIL": "No email address found yet, so no draft was written.",
+    "BELOW_THRESHOLD": "Score too low for an email draft.",
+    "DRAFT_FAILED": "The draft failed quality checks, so none was saved.",
+    "BLOCKED": "On the do-not-contact list. No draft.",
+    "CAP_HALTED": "Daily draft limit reached; will draft on a later run.",
+    "PROVIDER_DOWN": "Drafting tool was offline; will retry on a later run.",
+}
+
+
+def _strengths_weaknesses(breakdown: dict | None) -> str:
+    if not breakdown:
+        return ""
+    strong = [CRITERIA_PLAIN.get(k, k) for k, v in breakdown.items()
+              if v.get("criterion_score", 0) >= 70]
+    weak = [CRITERIA_PLAIN.get(k, k) for k, v in breakdown.items()
+            if v.get("criterion_score", 0) <= 30]
+    parts = []
+    if strong:
+        parts.append("Strong: " + ", ".join(strong) + ".")
+    if weak:
+        parts.append("Weak: " + ", ".join(weak) + ".")
+    return " ".join(parts)
+
+
+def lead_description(block: dict) -> str:
+    lines = [f"Score: {block.get('score_total', '?')} out of 100."]
+    sw = _strengths_weaknesses(block.get("score_breakdown"))
+    if sw:
+        lines.append(sw)
+    for reason in block.get("hard_fails") or []:
+        lines.append("Do not contact: " + HARD_FAIL_PLAIN.get(reason, reason) + ".")
+    for detail in (block.get("triggers") or {}).values():
+        lines.append(f"Buying signal: {detail}.")
+    if not block.get("triggers"):
+        lines.append("No recent buying signal; picked for company fit and cloud usage.")
+    status = block.get("draft_status")
+    if status:
+        lines.append(DRAFT_STATUS_PLAIN.get(status, status))
+    fetched = str(block.get("fetched_at") or "")[:10]
+    lines.append(f"Found by watchtower via Apollo on {fetched}.")
+    return "\n".join(lines)
+
+
+def deal_description(block: dict) -> str:
+    verdict = block.get("gonogo_verdict")
     lines = []
-    if payload.get("score_total") is not None:
-        lines.append(f"SCORE {payload['score_total']}/100 "
-                     f"(rubric {payload.get('rubric_version', '?')})")
-    if payload.get("gonogo_verdict"):
-        lines.append(f"GO/NO-GO: {payload['gonogo_verdict']}")
-    if payload.get("triggers"):
-        lines.append("Triggers: " + "; ".join(
-            f"{k}: {v}" for k, v in payload["triggers"].items()))
-    if payload.get("draft_status"):
-        lines.append(f"Outreach draft: {payload['draft_status']} "
-                     "(sending is always manual, in Zoho Mail)")
-    if payload.get("hard_fails"):
-        lines.append("Hard fails: " + ", ".join(payload["hard_fails"]))
-    header = "\n".join(lines)
-    return (header + "\n\n--- watchtower record (do not edit below) ---\n"
-            + json.dumps(payload, indent=2, sort_keys=True, default=str)[:29000])
+    if verdict == "GO":
+        lines.append("Decision: GO. Worth responding.")
+    elif verdict == "NO_GO":
+        lines.append("Decision: NO GO. Skip this one.")
+    elif verdict == "NEEDS_HUMAN":
+        lines.append("Decision: NEEDS ZOHAIB. He must read this one himself.")
+    for d in block.get("disqualifiers") or []:
+        kind = d.get("kind") if isinstance(d, dict) else getattr(d, "kind", "")
+        quote = d.get("requirement_quote") if isinstance(d, dict) else getattr(d, "requirement_quote", "")
+        lines.append(f"Deal-breaker: {DISQUALIFIER_PLAIN.get(kind, kind)}. "
+                     f"The document says: \"{quote}\"")
+    if block.get("set_aside_text_verbatim"):
+        lines.append("Set-aside language found (Zohaib must judge this): "
+                     f"\"{block['set_aside_text_verbatim']}\"")
+    if block.get("incumbent"):
+        lines.append(f"Current contract holder: {block['incumbent']}.")
+    hours = block.get("estimated_hours")
+    days = block.get("deadline_days")
+    if hours or days is not None:
+        bits = []
+        if hours:
+            bits.append(f"about {int(hours)} hours of work to respond")
+        if days is not None:
+            bits.append(f"due in {days} days")
+        lines.append(("Effort: " + ", ".join(bits) + ".").capitalize())
+    lines.append(f"Score: {block.get('score_total', '?')} out of 100.")
+    sw = _strengths_weaknesses(block.get("score_breakdown"))
+    if sw:
+        lines.append(sw)
+    source = {"esbd": "Texas ESBD", "sam_gov": "SAM.gov",
+              "university_boards": "Texas university boards"}.get(
+        block.get("source"), block.get("source") or "")
+    link = block.get("url") or ""
+    lines.append(f"From {source}. {link}".strip())
+    lines.append("Nothing has been submitted.")
+    return "\n".join(lines)
 
 
 class ZohoCRM:
@@ -122,7 +224,7 @@ class ZohoCRM:
             "City": account.get("city"),
             "State": account.get("state"),
             "Lead_Source": "Khavion watchtower",
-            "Description": description_block(record_block),
+            "Description": lead_description(record_block),
         }
         fields = {k: v for k, v in fields.items() if v not in (None, "")}
 
@@ -141,22 +243,43 @@ class ZohoCRM:
     def upsert_deal(self, sol: dict, record_block: dict) -> str:
         deal_name = f"[{sol.get('dedupe_key')}] {sol.get('title', '')}"[:120]
         closing = str(sol.get("due_date") or "")[:10] or None
+        verdict = record_block.get("gonogo_verdict")
+        next_step = {
+            "GO": "Zohaib: review and decide",
+            "NO_GO": "Skip (see description)",
+            "NEEDS_HUMAN": "Zohaib: read the description",
+        }.get(verdict, "Review")
         fields = {
             "Deal_Name": deal_name,
             # Neutral first stage; nothing here may imply submission.
             "Stage": "Qualification",
-            "Description": description_block(record_block),
+            "Next_Step": next_step[:100],
+            "Type": "New Business",
+            "Lead_Source": "Khavion watchtower",
+            "Description": deal_description(record_block),
         }
         if closing:
             fields["Closing_Date"] = closing
-        resp = self.auth.request(
-            "POST", self._url("Deals/upsert"), self.auth.crm_headers,
-            json={"data": [fields], "duplicate_check_fields": ["Deal_Name"]})
-        payload = self._check(resp, "deal upsert")
-        entry = payload["data"][0]
-        if entry.get("code") != "SUCCESS":
-            raise ZohoCRMError(f"deal upsert rejected: {str(entry)[:300]}")
-        rec_id = str(entry["details"]["id"])
-        log.info("crm: deal %s for %s", entry.get("action", "upserted"),
-                 sol.get("dedupe_key"))
-        return rec_id
+
+        # Same drop-rejected-field retry as leads: org picklists vary.
+        for attempt in range(4):
+            resp = self.auth.request(
+                "POST", self._url("Deals/upsert"), self.auth.crm_headers,
+                json={"data": [fields], "duplicate_check_fields": ["Deal_Name"]})
+            try:
+                entry = (resp.json().get("data") or [{}])[0]
+            except (ValueError, AttributeError):
+                entry = {}
+            if resp.status_code < 400 and entry.get("code") == "SUCCESS":
+                rec_id = str(entry["details"]["id"])
+                log.info("crm: deal %s for %s", entry.get("action", "upserted"),
+                         sol.get("dedupe_key"))
+                return rec_id
+            bad = (entry.get("details") or {}).get("api_name")
+            if attempt < 3 and bad and bad in fields and bad not in ("Deal_Name", "Stage"):
+                log.warning("crm: Zoho rejected deal field %s; retrying without it", bad)
+                fields = {k: v for k, v in fields.items() if k != bad}
+                continue
+            raise ZohoCRMError(f"deal upsert rejected (HTTP {resp.status_code}): "
+                               f"{str(entry)[:300]}")
+        raise ZohoCRMError("deal upsert failed after dropping rejected fields")
