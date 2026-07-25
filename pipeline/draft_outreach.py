@@ -141,6 +141,22 @@ def org_name_check(text: str, rules: dict | None = None) -> list[str]:
     return problems
 
 
+def _capitalisation_check(body: str) -> list[str]:
+    """The subject line is lowercase by house style; the body is not.
+
+    Observed on both candidate models during the 2026-07-25 A/B: told the
+    subject must be lowercase, they apply it to the whole email. An all-lowercase
+    cold email to a CTO reads as careless rather than casual, and the prompt
+    alone did not reliably stop it."""
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", body or "") if s.strip()]
+    if len(sentences) < 2:
+        return []
+    starts_upper = sum(1 for s in sentences if s[0].isupper())
+    if starts_upper == 0:
+        return ["body is entirely lowercase; only the subject line is lowercase"]
+    return []
+
+
 def voice_check(subject: str, body: str) -> list[str]:
     """Deterministic checks against brain/voice.md's machine-readable block."""
     rules = brain.voice_rules()
@@ -150,6 +166,7 @@ def voice_check(subject: str, body: str) -> list[str]:
         if phrase.lower() in text:
             violations.append(f"banned phrase: {phrase!r}")
     violations.extend(org_name_check(f"{subject}\n{body}", rules))
+    violations.extend(_capitalisation_check(body))
     for ch in rules.get("banned_characters", []):
         if ch in subject or ch in body:
             violations.append(f"banned character: {ch!r}")

@@ -221,6 +221,19 @@ def test_editor_is_told_the_body_is_not_lowercase():
     assert "normal sentence capitalization" in PASS_TWO_TEMPLATE.lower()
 
 
+def test_all_lowercase_body_is_rejected():
+    """Both candidate models did this during the A/B, so the prompt alone is not
+    enough: it needs to be a check."""
+    from pipeline.draft_outreach import _capitalisation_check
+
+    assert _capitalisation_check(
+        "patrick saw circuit closed a round. post-raise spend jumps. worth a look?")
+    assert _capitalisation_check(
+        "Patrick, saw Circuit closed a round. Post-raise spend jumps. Worth a look?") == []
+    # A single short line is not evidence of anything either way.
+    assert _capitalisation_check("worth a look?") == []
+
+
 def test_no_trigger_account_gets_stack_instruction(tmp_path, firewall):
     from pipeline.draft_outreach import NO_TRIGGER_INSTRUCTION, _pick_variant, _sequence_block
     assert _pick_variant({**ACCOUNT, "triggers": {}}) is None
