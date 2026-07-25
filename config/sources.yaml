@@ -68,28 +68,25 @@ esbd:
              llm, generative ai, genai, chatbot, data platform, devops, migration,
              modernization, software development, it consulting]
 
-houston_beacon:
+houston_local:
+  # City of Houston + Harris County. Both portals are genuinely unreachable
+  # for a no-JS, requests-only client (verified 2026-07-24); the adapter ships
+  # implementing the contract but disabled, and fails loudly if force-enabled.
   enabled: false
-  access_method: blocked_waf
+  access_method: blocked
   verified: "2026-07-24"
-  url: "https://www.beaconbid.com/solicitations/city-of-houston/open"
   reason: >
     City of Houston moved bids to Beacon Bid (legacy purchasing.houstontx.gov
-    301-redirects to houstontx.gov/bizwithhou). Beacon Bid returns HTTP 403 to
-    every non-browser request including robots.txt; no public API exists.
-    TODO(zohaib): register as a City of Houston vendor on Beacon Bid and enable
-    NIGP-matched email alerts; the pipeline cannot reach this source.
-
-harris_bonfire:
-  enabled: false
-  access_method: blocked_js
-  verified: "2026-07-24"
-  url: "https://harriscountytx.bonfirehub.com/portal/?tab=openOpportunities"
-  reason: >
-    Harris County distributes solicitations via Bonfire (Euna). The portal is a
-    JS-rendered shell (raw HTML contains no data) and robots.txt disallows all.
-    TODO(zohaib): register as a Harris County supplier in Bonfire (free) for
-    NIGP-matched email alerts; the pipeline cannot reach this source.
+    301-redirects to houstontx.gov/bizwithhou); Beacon Bid returns HTTP 403 to
+    every non-browser request including robots.txt, and no public API exists.
+    Harris County distributes via Bonfire (Euna): the portal is a JS-rendered
+    shell (raw HTML contains no data) and robots.txt disallows all.
+    TODO(zohaib): register as a City of Houston vendor on Beacon Bid and as a
+    Harris County supplier in Bonfire (both free) and enable NIGP-matched
+    email alerts; those alerts are the compliant path for these two sources.
+  portals:
+    houston_beacon: "https://www.beaconbid.com/solicitations/city-of-houston/open"
+    harris_bonfire: "https://harriscountytx.bonfirehub.com/portal/?tab=openOpportunities"
 
 university_boards:
   enabled: true
@@ -115,3 +112,4 @@ university_boards:
     "721": "University Of Texas At Austin"
   # Also matched by name keywords in title/description as a safety net:
   name_keywords: ["university of houston", "texas a&m", "university of texas", "ut austin", "uthealth", "md anderson"]
+  detail_budget_per_run: 8
