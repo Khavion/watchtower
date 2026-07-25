@@ -1,0 +1,9 @@
+# Locked dependency list (build spec) + approved additions (beautifulsoup4, pytest).
+# Pinned from a clean resolve on 2026-07-24, Python 3.13.
+APScheduler==3.11.3
+beautifulsoup4==4.15.0
+keyring==25.7.0
+pydantic==2.13.4
+pytest==9.1.1
+PyYAML==6.0.3
+requests==2.34.2

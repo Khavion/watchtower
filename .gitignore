@@ -1,0 +1,24 @@
+# Local/secret material must never be committed (acceptance gate #7)
+*.local*
+.env
+.env.*
+*.pem
+*.key
+*_token*
+*credential*
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Runtime data (accounts, solicitations, run logs, state) stays on the machine
+data/*
+!data/.gitkeep
+
+# macOS
+.DS_Store

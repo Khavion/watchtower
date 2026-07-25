@@ -1,0 +1,18 @@
+# LLM provider selection. Switching providers means changing `active` and
+# nothing else (locked decision; hosted is intentionally unwired).
+
+active: ollama
+
+ollama:
+  base_url: http://127.0.0.1:11434
+  model: llama3.1:8b
+  # Ollama's server default num_ctx is 4096 (verified 2026-07-24); we set it
+  # explicitly because drafting context (brain files + record) exceeds that.
+  num_ctx: 8192
+  temperature: 0.4
+  keep_alive: 10m
+  timeout_seconds: 180
+
+hosted:
+  # Stub. providers/hosted.py raises NotImplementedError by design.
+  model: null

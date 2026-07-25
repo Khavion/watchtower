@@ -1,0 +1,96 @@
+# Procurement source registry.
+# Access method and verification date are recorded per source (build requirement).
+# All research verified 2026-07-24 via official docs / live-site inspection.
+# Re-verify quarterly: portal URLs churn (houstontx.gov purchasing moved in 2025-26).
+
+defaults:
+  user_agent: "KhavionWatchtower/1.0 (procurement monitor; contact: zkhawaja721@gmail.com)"
+  min_seconds_between_requests: 5
+  timeout_seconds: 30
+  max_retries: 3
+  backoff_factor: 2.0
+
+sam_gov:
+  enabled: true
+  access_method: official_api
+  verified: "2026-07-24"
+  base_url: "https://api.sam.gov/opportunities/v2/search"
+  notes: >
+    Get Opportunities Public API v2. Key in khavion-sam-api-key (Keychain).
+    Basic personal key = 10 requests/day until an entity is associated with the
+    sam.gov profile (then 1,000/day); quota resets midnight UTC; 429 on breach.
+    postedFrom/postedTo are mandatory, MM/dd/yyyy, max 1-year span. limit must
+    be passed explicitly (server default is 1). Response postedDate uses a
+    different format (YYYY-MM-DD HH:MM:SS). The notice description is a URL
+    requiring an extra keyed call, budgeted under sam_max_calls_per_day.
+  # r = Sources Sought, s = Special Notice. There is no dedicated RFI ptype;
+  # RFIs are conventionally posted under r or s, so we poll both.
+  ptypes_primary: [r, s]
+  # Full solicitations: fetched, but flagged NOT_YET_ELIGIBLE when they carry
+  # past-performance requirements (a firm with no federal past performance
+  # cannot answer them yet).
+  ptypes_secondary: [o, k, p]
+  naics: ["541512", "541511", "541519", "518210"]
+  lookback_days: 3
+  max_calls_per_run: 4
+
+esbd:
+  enabled: true
+  access_method: polite_scrape
+  verified: "2026-07-24"
+  approved_by_owner: "2026-07-24"   # Zohaib approved scraping despite robots.txt Disallow: /
+  list_url: "https://www.txsmartbuy.gov/esbd"
+  detail_url_prefix: "https://www.txsmartbuy.gov/esbd/"
+  notes: >
+    Texas Electronic State Business Daily. Server-rendered HTML; no API, no RSS,
+    no data.texas.gov mirror (all checked 2026-07-24). robots.txt is a blanket
+    Disallow: / — owner approved polite scraping: 2 runs/day weekdays, real UA
+    with contact email, >=5s between requests, hard page cap. URL query filters
+    silently no-op (?keyword= returns the unfiltered corpus — verified), so we
+    page the list and filter locally. Default ordering is last-updated and bulk
+    re-timestamping reorders old records: read several pages, select on posting
+    date, never diff page 1.
+  max_pages_per_run: 10
+  # NIGP class prefixes of interest (data processing / software / consulting
+  # families). Local filter only; refined during adapter build.
+  nigp_class_prefixes: ["204", "208", "209", "918", "920", "946", "958", "961", "962"]
+  keywords: [cloud, aws, azure, kubernetes, artificial intelligence, machine learning,
+             llm, generative ai, genai, chatbot, data platform, devops, migration,
+             modernization, software development, it consulting]
+
+houston_beacon:
+  enabled: false
+  access_method: blocked_waf
+  verified: "2026-07-24"
+  url: "https://www.beaconbid.com/solicitations/city-of-houston/open"
+  reason: >
+    City of Houston moved bids to Beacon Bid (legacy purchasing.houstontx.gov
+    301-redirects to houstontx.gov/bizwithhou). Beacon Bid returns HTTP 403 to
+    every non-browser request including robots.txt; no public API exists.
+    TODO(zohaib): register as a City of Houston vendor on Beacon Bid and enable
+    NIGP-matched email alerts; the pipeline cannot reach this source.
+
+harris_bonfire:
+  enabled: false
+  access_method: blocked_js
+  verified: "2026-07-24"
+  url: "https://harriscountytx.bonfirehub.com/portal/?tab=openOpportunities"
+  reason: >
+    Harris County distributes solicitations via Bonfire (Euna). The portal is a
+    JS-rendered shell (raw HTML contains no data) and robots.txt disallows all.
+    TODO(zohaib): register as a Harris County supplier in Bonfire (free) for
+    NIGP-matched email alerts; the pipeline cannot reach this source.
+
+university_boards:
+  enabled: true
+  access_method: via_esbd
+  verified: "2026-07-24"
+  notes: >
+    UH, Texas A&M System, and UT institutions cross-post formal solicitations to
+    ESBD (state agencies >= $25k; UT System policy says >= $50k, so smaller UT
+    work hides on Bonfire portals we cannot reach). AggieBid
+    (bids.sciquest.com, Jaggaer) is server-rendered but robots-disallowed and
+    redundant with ESBD, so it is not fetched. This adapter filters ESBD records
+    by agency number prefix; prefixes verified during adapter build from live
+    ESBD agency data.
+  agency_number_prefixes: []   # populated during Phase 3a/3b build from ESBD agency list

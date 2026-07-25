@@ -1,0 +1,33 @@
+# Hard caps, enforced from day one by pipeline/capgate.py.
+# Exceeding any cap halts that pipeline and logs it. It never degrades silently.
+
+apollo:
+  # Set by deploy/setup_credentials.py during Phase 1 to 50% of the account's
+  # current credit balance. 0 means "not yet configured" and blocks enrichment.
+  monthly_credit_cap: 0
+  per_run_credit_cap: 25
+
+drafts:
+  max_per_day: 25
+
+sources:
+  # Global politeness floor; per-source detail lives in sources.yaml.
+  max_requests_per_minute: 6
+  # Basic personal SAM.gov key = 10 requests/day (verified 2026-07-24).
+  # TODO(zohaib): associate your entity with your sam.gov profile to unlock
+  # 1,000/day, then this can rise.
+  sam_max_calls_per_day: 8
+
+accounts:
+  # Idempotency window: never re-fetch or re-touch an account seen this recently.
+  min_days_between_touches: 30
+
+capacity:
+  # Used by gonogo.py to decide whether responding fits the week.
+  # TODO(zohaib): confirm your real weekly side-capacity in hours.
+  weekly_capacity_hours: 10
+
+gonogo:
+  # A due date closer than this many days is a disqualifier.
+  # TODO(zohaib): confirm the minimum runway you want.
+  min_deadline_days: 7

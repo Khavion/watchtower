@@ -1,0 +1,23 @@
+# Schedule for the daemon (pipeline/run.py --daemon, APScheduler 3.11.x,
+# kept alive by deploy/com.khavion.agent.plist).
+#
+# Procurement is twice daily on weekdays by design: solicitation response
+# windows run weeks, earlier detection is worth nothing, and hourly polling
+# invites rate limits and IP blocks. Scoring, go/no-go, and drafting trigger
+# on a completed fetch, not a clock.
+
+timezone: America/Chicago
+
+jobs:
+  procurement_fetch:
+    cron: { day_of_week: "mon-fri", hour: "7,14", minute: 0 }
+  apollo_enrich:
+    cron: { day_of_week: "mon", hour: 6, minute: 0 }
+  cliq_poll:
+    interval_seconds: 60
+
+# Stages chained after each completed fetch, in order.
+pipeline_on_fetch: [classify, score, gonogo, draft, publish]
+
+cliq:
+  channel_unique_name: khavionagent
