@@ -54,10 +54,26 @@ the answer is the smaller engagement, not the smaller price.
 Scope removed: the implementation. The tier table *is* the negotiation: moves
 happen between tiers, not between prices.
 
+## Payment terms (confirmed 2026-07-25)
+
+The standing default on every offer, written into `templates/sow.md` and used by
+the proposal writer:
+
+```yaml
+payment_terms:
+  deposit_percent: 50          # due on signature, before work begins
+  balance: "on delivery and acceptance"
+  invoice_terms: "net-30"
+  currency: USD
+```
+
+In words: **50% up front, the balance on delivery, invoiced net-30.** Retainers
+bill monthly in advance. The deposit is not negotiable downward; if a buyer
+cannot prepay, the move is a smaller first engagement, not softer terms.
+
 ## Red lines in negotiation
 
 - Never trade price for "future work" promises.
 - Never accept payment terms beyond net-30 on offers under $45K.
-- Never begin work before a signed SOW and (for audits+) first payment.
-- TODO(zohaib): confirm the net-30 line and prepayment split you actually want
-  on each tier.
+- Never begin work before a signed SOW and the deposit received.
+- Never discount. Reduce scope instead (this whole file explains why).

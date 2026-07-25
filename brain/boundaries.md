@@ -30,8 +30,9 @@ unheld_certifications:
   - "StateRAMP"
   - "CJIS"
   - "PCI DSS QSA"
-# TODO(zohaib): confirm this list; add anything else you are asked for and
-# do not hold (or remove anything you obtain later).
+# Confirmed by Zohaib 2026-07-25: he holds none of these. Any solicitation
+# requiring one routes to NO_GO with the requirement quoted, so no evening is
+# spent on a bid that cannot be won. If he obtains one later, delete that line.
 ```
 
 ## The employer firewall

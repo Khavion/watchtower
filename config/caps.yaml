@@ -24,10 +24,13 @@ accounts:
 
 capacity:
   # Used by gonogo.py to decide whether responding fits the week.
-  # TODO(zohaib): confirm your real weekly side-capacity in hours.
-  weekly_capacity_hours: 10
+  # Confirmed 2026-07-25. Zohaib's answer was "no minimum, I have nothing but
+  # free time", so this is not his availability, it is a deliberate ceiling:
+  # go/no-go has to mean something, and a bid needing 40+ hours a week is still
+  # a bad idea next to a full-time job. Raise it if the ceiling ever bites.
+  weekly_capacity_hours: 30
 
 gonogo:
   # A due date closer than this many days is a disqualifier.
-  # TODO(zohaib): confirm the minimum runway you want.
+  # Confirmed 2026-07-25: 7 days.
   min_deadline_days: 7

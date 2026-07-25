@@ -15,8 +15,12 @@ rejects and retries on any hit, then marks `DRAFT_FAILED`).
    you're building", no pretending to have used their product unless true.
 6. **No superlatives.** "Cut hold time from 94 to 22 minutes" beats
    "incredible results". Numbers or nothing.
-7. **Attribution stays attached.** Proof from employer/context work names the
-   context in the same sentence (see `proof.md`).
+7. **No employer names, ever.** (Owner directive, 2026-07-25.) The work is the
+   proof, not the logo. Never write "at AWS", "at Amazon", "at Microsoft", "at
+   Nordic Global", or any variation, and never borrow a client name or a metric
+   produced inside someone else's business. Say what he can do and has built.
+   Generic industry labels ("a large cloud vendor", "a healthcare provider")
+   and the teaching role are the approved exceptions. Machine-checked below.
 8. **Plain words.** "Use" not "leverage". "Help" not "empower". "Talk" not
    "connect".
 9. Subject lines: 2 to 5 words, lowercase except proper nouns, no clickbait,
@@ -67,6 +71,21 @@ rejects and retries on any hit, then marks `DRAFT_FAILED`).
     "(?i)\\bdear (sir|madam)\\b",
     "(?i)\\bto whom it may concern\\b",
     "(?i)\\bworld[- ]class\\b"
+  ],
+  "banned_org_names": [
+    "aws",
+    "amazon",
+    "amazon web services",
+    "microsoft",
+    "azure",
+    "nordic global",
+    "avesha",
+    "cohere"
+  ],
+  "org_name_exceptions": [
+    "amazon bedrock",
+    "azure openai",
+    "houston city college"
   ],
   "max_words": 120,
   "max_asks": 1
