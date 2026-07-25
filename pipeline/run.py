@@ -131,6 +131,12 @@ def _print_scored(records: list[dict]) -> None:
         cls = rec.get("classification") or {}
         print(f"    classify: {cls.get('status')} relevant={cls.get('relevant')} "
               f"({cls.get('reason', '')[:70]})")
+        if cls.get("relevant") is False:
+            # Dry-run scores everything so the rubric can be inspected, but a
+            # live run stops at the classifier. Say so, or the GO printed below
+            # reads as if this were going to be pursued.
+            print("      (a live run would stop here: scored below only so you "
+                  "can check the rubric)")
         print(f"    score: {score.get('total')} (rubric {score.get('rubric_version')})"
               f"  hard_fails={score.get('hard_fails')}")
         for name, crit in (score.get("criteria") or {}).items():
