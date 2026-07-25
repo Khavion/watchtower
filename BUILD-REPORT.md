@@ -1,5 +1,156 @@
 # BUILD-REPORT — Khavion watchtower
 
+## Phase 2: the Mac Mini, 2026-07-25
+
+Everything below the divider is the original build on the MacBook Pro. This
+section is what changed when the system moved to the Mac Mini M4 (16 GB), which
+is now the production machine. **125 tests green.**
+
+### What the Mini had already
+
+Homebrew 6.0.11, Ollama 0.31.1 on loopback, macOS 26.5.2, Python 3.12 and 3.14.
+Two corrections to the planning docs, both verified: `nomic-embed-text` was NOT
+installed (and is still not needed — keyword search has not demonstrably missed
+anything yet), and `gemma4:12b-it-qat` does exist as a tag.
+
+### The model, chosen by A/B on real work (2026-07-25)
+
+Both candidates ran the same six classification cases and the same two drafting
+jobs through the full guard chain, on this machine.
+
+| | qwen3.5 (9.7B) | gemma4:12b-it-qat | winner |
+|---|---|---|---|
+| Classification correct | 6/6 | 6/6 | tie |
+| Classification wall-clock | 106s | 158s | qwen3.5 |
+| Drafts passing all guards | 2/2 | 2/2 | tie |
+| Edit passes needed | 3 and 2 | **2 and 1** | gemma4 |
+| Draft formatting | body came back all-lowercase | correct | gemma4 |
+| Resident at 16k context | 5.8 GB | 7.7 GB | qwen3.5 |
+
+**gemma4:12b-it-qat wins** on the thing Zohaib actually judges. It costs ~2 GB
+more and is roughly 50% slower per call; on a machine running a handful of
+background jobs a day where nobody watches the clock, that is the right trade.
+Measured directly: the two cannot be co-resident on 16 GB (Ollama evicts one),
+which confirms the one-model-shared design rather than per-agent models.
+`llama3.1:8b` was removed as superseded.
+
+### The three fixes that mattered most
+
+1. **The context window.** Ollama defaults to 4,096 tokens regardless of what
+   the model advertises, and `classify.py` separately truncated descriptions to
+   2,400 characters. Long solicitations were being cut twice. Both removed;
+   `num_ctx` is 16,384 and set in the environment as well as per request.
+   Because `launchctl setenv` is wiped by every reboot, `deploy/ollama_env.sh`
+   plus `com.khavion.ollamaenv` re-apply it at each login — otherwise the
+   system would keep working while silently reverting to 4,096.
+   **Live-verified:** the exact false negative from 2026-07-24 (an agentic-AI
+   sources-sought dismissed as "preliminary") now classifies correctly on a
+   ~9,000-character description.
+2. **Schema-constrained classification.** Verdicts come from Ollama's `format`
+   parameter with a real JSON Schema at temperature 0, `rationale` ordered
+   before `relevant` so reasoning precedes the decision. The old "look for the
+   word yes" fallback is gone: an untrustworthy verdict is UNCLASSIFIED, which
+   a human sees.
+3. **Two-pass drafting.** Pass one thinks about the prospect with the style
+   exemplars and is told to ignore format entirely. Pass two only enforces the
+   rules on text that already exists. Retries go to the editor, not the writer.
+
+### The employer-name rule (owner directive, 2026-07-25)
+
+Zohaib: *"my work and words are my proof rather than 'hey I worked here'"*, and
+separately, he has no clearance to publish client names or metrics produced
+inside an employer's business. `brain/proof.md` was rewritten as capability
+claims with no employer names. The patient hold-time metric was deleted outright
+(real, but not his to publish). The 20-70% figure survives only in a separate
+`industry_ranges` block, so it can never be presented as his own result.
+Approved exceptions: the teaching role by name, and generic industry labels.
+
+Enforced mechanically rather than requested in a prompt, because a small model
+reaches for a recognizable name exactly when credibility is thin. Confirmed
+during the A/B: **both** models tried to write "AWS" and were rejected.
+
+Honest cost: cold emails are harder to write well without a recognizable name
+doing the credibility work. Drafts are more honest and slightly less immediately
+impressive.
+
+### Guards added from live output on the Mini
+
+Each of these is a real failure observed, not a hypothetical:
+
+- an invented "your recent influx of engineering headcount" on an account with
+  no hiring trigger → possessive headcount claims are now fabrications;
+- "cut compute costs by up to seventy percent" stated as a personal result →
+  a percentage in a first-person achievement sentence now needs its hedge word;
+- an entirely lowercase email body → rejected, on both candidate models.
+
+### The multi-agent system
+
+The long-lived APScheduler daemon is retired. It held memory the model wants,
+kept its schedule in a file, and its per-job guard could not stop two
+*different* agents colliding — the collision that actually matters on 16 GB.
+
+Replaced by `pipeline/dispatch.py`: a 60-second launchd tick that takes an
+exclusive `fcntl.flock`, runs **exactly one** due agent, and exits. Schedules
+live in `data/watchtower.db`, so adding an agent later is one row. Each job
+carries a staleness window, so a three-day-old briefing is dropped rather than
+delivered as if it were this morning's. The Cliq poller holds a **separate**
+lock so chat stays responsive during a long run, and work-starting commands
+enqueue a job rather than running inline.
+
+Four new agents, all sharing the one model, none of which acts: daily briefing,
+inbox triage (reads mail, drafts replies, still no send path anywhere),
+marketing writer (writes files; there is no LinkedIn integration and will not
+be), proposal writer (on demand, from a real record).
+
+Cliq gained `agents`, `brief`, `triage`, `write`, `proposal <id>` and
+`note <free text>`. `note` is the only free-text verb, and is safe because it
+**stores** rather than acts. `block` is now owner-only, gated on the Cliq sender
+id and the OAuth token's owner, and **fails closed** if identity cannot be
+established — the VA can run everything else.
+
+### Settings confirmed with Zohaib (closing the old TODO list)
+
+| Was open | Now |
+|---|---|
+| Weekly capacity | 30 h/week. He said "no minimum, nothing but free time"; this is a deliberate ceiling so go/no-go still means something next to a full-time job |
+| Minimum bid runway | 7 days |
+| Payment terms | 50% deposit, balance on delivery, net-30 |
+| Certifications held | None of the eight; those bids auto-decline with the requirement quoted |
+| AWS-era numbers | Not published. Qualitative only |
+| Mail read access | Granted; scopes expanded before the credential step so the grant-code dance happened once |
+| Marketing agent | Cleared and enabled |
+| VA access | CRM + Cliq + all commands except `block` |
+| The Mini | Always on, nobody browses on it. `caffeinate -s` keeps it awake without needing his password |
+
+Still open, and only he can close it: **`brain/blocklist.local.md` is empty**,
+so the employer firewall passes vacuously until he types `block <domain>` in
+Cliq. This is the single most important thing left.
+
+### The three things most likely to break first (2026-07-25)
+
+1. **Mail reading, on first contact.** `zoho/mail_read.py` was written against
+   Zoho's documented endpoints but has **not been exercised live** — the
+   credentials were not on this machine while it was built. If Zoho's message
+   listing or content paths differ, inbox triage fails loudly at 7am and posts
+   that it could not read the inbox. Fix: run
+   `.venv/bin/python -m agents.collect_style` once and adjust the paths.
+2. **The ESBD scraper**, unchanged from Phase 1. It parses a NetSuite storefront
+   Texas has re-skinned before. Symptom: `esbd` returns 0 rows in
+   `data/runs/*.log`. Fix: recapture the fixtures, adjust selectors in
+   `sources/esbd.py`.
+3. **Memory pressure.** The Mini was already at ~4.5 GB swap during the A/B with
+   PostgreSQL 16 running as a separate Homebrew service alongside the model.
+   Nothing is broken, but there is less headroom than the plan assumed. Symptom:
+   agents get slow rather than failing. Fix: stop the unused PostgreSQL service,
+   or drop `num_ctx` to 8192.
+
+Honourable mention, carried forward: the SAM.gov key expires ~2026-10-20, and
+Keychain ACL re-prompts if Homebrew upgrades Python.
+
+---
+
+## Phase 1: the original build
+
 Built 2026-07-24 on the MacBook Pro (M3 Max). 77 tests green. Every external
 API in the system has been exercised live at least once, including one
 controlled end-to-end publish (CRM lead `...801001`, Zoho Mail draft
@@ -90,6 +241,10 @@ Two inputs, two outputs, no agent runtime:
   job-req observations; drafts may only reference observed triggers.
 
 ## Every TODO(zohaib) left, and why
+
+> **Superseded 2026-07-25.** Most of this table was closed by the Mac Mini
+> session; see "Settings confirmed with Zohaib" above. The blocklist row is the
+> one that still matters.
 
 | Where | What | Why only you |
 |---|---|---|
