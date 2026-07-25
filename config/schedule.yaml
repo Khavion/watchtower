@@ -1,20 +1,18 @@
-# Schedule for the daemon (pipeline/run.py --daemon, APScheduler 3.11.x,
-# kept alive by deploy/com.khavion.agent.plist).
+# Channel and pipeline settings.
 #
-# Procurement is twice daily on weekdays by design: solicitation response
+# SCHEDULES NO LONGER LIVE HERE. As of 2026-07-25 they live in the `jobs` table
+# in data/watchtower.db, seeded from the JOBS list in pipeline/dispatch.py, so
+# adding an agent later is one row rather than a config edit plus a restart.
+#
+#   see what is scheduled:  .venv/bin/python -m pipeline.dispatch --status
+#   re-seed the table:      .venv/bin/python -m pipeline.dispatch --register
+#
+# Procurement stays twice daily on weekdays by design: solicitation response
 # windows run weeks, earlier detection is worth nothing, and hourly polling
 # invites rate limits and IP blocks. Scoring, go/no-go, and drafting trigger
 # on a completed fetch, not a clock.
 
 timezone: America/Chicago
-
-jobs:
-  procurement_fetch:
-    cron: { day_of_week: "mon-fri", hour: "7,14", minute: 0 }
-  apollo_enrich:
-    cron: { day_of_week: "mon", hour: 6, minute: 0 }
-  cliq_poll:
-    interval_seconds: 60
 
 # Stages chained after each completed fetch, in order.
 pipeline_on_fetch: [classify, score, gonogo, draft, publish]

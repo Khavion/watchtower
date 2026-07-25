@@ -1,9 +1,12 @@
-"""Entry point: one-shot jobs, dry runs, and the daemon.
+"""Entry point: the lead-finding jobs, dry runs, and the Cliq poller.
 
     python -m pipeline.run --dry-run --limit 5      # zero Zoho writes, prints scores
     python -m pipeline.run --job procurement_fetch  # one live fetch cycle
     python -m pipeline.run --job apollo_enrich
-    python -m pipeline.run --daemon                 # what the LaunchAgent runs
+    python -m pipeline.run --job cliq_poll          # one poll; what launchd runs
+
+Scheduling lives in pipeline/dispatch.py and data/watchtower.db, not here and
+not in a plist. This module provides jobs; the dispatcher decides when.
 
 Dry-run performs ZERO Zoho writes structurally: no Zoho client is even
 constructed. Scoring/gonogo/drafting chain onto completed fetches, not a
@@ -261,55 +264,133 @@ def job_apollo_enrich(dry_run: bool = False, limit: int | None = None) -> dict:
 
 def job_cliq_poll() -> None:
     """Poll the channel for commands. Strict allowlist; own messages ignored;
-    anything else gets one reply naming the valid verbs. Never crashes the daemon."""
-    from zoho.auth import ZohoAuth
-    from zoho.cliq import MARKER, VALID_VERBS_REPLY, ZohoCliq, parse_command
+    anything else gets one reply naming the valid verbs. Never raises.
 
+    Holds the CLIQ lock, not the agent lock, so chat stays responsive while a
+    long agent is running. Commands that start work enqueue a job for the
+    dispatcher rather than running it here, which is what keeps the
+    one-agent-at-a-time guarantee true.
+    """
     import logging as _logging
+
+    from pipeline.dispatch import CLIQ_LOCK, Busy, exclusive_lock
+    from zoho.auth import ZohoAuth
+    from zoho.cliq import MARKER, VALID_VERBS_REPLY, ZohoCliq, is_owner_only, parse_command
+
     plog = _logging.getLogger("cliq.poll")  # chatty 60s job: no per-poll run file
 
     try:
-        cliq = ZohoCliq(ZohoAuth(), config.schedule().get("cliq", {}).get(
-            "channel_unique_name", "khavionagent"))
-        st = state.load()
-        cursor = int(st.get("cliq_cursor") or (time.time() - 120) * 1000)
-        messages = cliq.fetch_messages(cursor)
-        if not messages:
-            return
-        newest = cursor
-        for msg in messages:
-            newest = max(newest, msg["time"] + 1)
-            text = msg["text"]
-            if text.strip().startswith(MARKER):
-                continue  # our own output
-            sanitize.scan(text, context="cliq message")
-            command = parse_command(text)
-            if command is None:
-                plog.warning("cliq: non-command message ignored; replying with verbs")
-                cliq.post(VALID_VERBS_REPLY)
-                continue
-            verb, arg = command
-            plog.info("cliq command: %s %s", verb, arg or "")
-            _dispatch_command(verb, arg, cliq)
-        st = state.load()
-        st["cliq_cursor"] = newest
-        state.save(st)
+        with exclusive_lock(CLIQ_LOCK):
+            cliq = ZohoCliq(ZohoAuth(), config.schedule().get("cliq", {}).get(
+                "channel_unique_name", "khavionagent"))
+            st = state.load()
+            cursor = int(st.get("cliq_cursor") or (time.time() - 120) * 1000)
+            messages = cliq.fetch_messages(cursor)
+            if not messages:
+                return
+            newest = cursor
+            for msg in messages:
+                newest = max(newest, msg["time"] + 1)
+                text = msg["text"]
+                if text.strip().startswith(MARKER):
+                    continue  # our own output
+                sanitize.scan(text, context="cliq message")
+                command = parse_command(text)
+                if command is None:
+                    plog.warning("cliq: non-command message ignored; replying with verbs")
+                    cliq.post(VALID_VERBS_REPLY)
+                    continue
+                verb, arg = command
+                if is_owner_only(verb) and not _is_owner(cliq, msg, st):
+                    plog.warning("cliq: refused owner-only verb %r from another user", verb)
+                    cliq.post("that command is Zohaib's only. Nothing was changed.")
+                    continue
+                # The argument is deliberately not logged: `note` text is his,
+                # and `block` domains must never reach a log file.
+                plog.info("cliq command: %s", verb)
+                _dispatch_command(verb, arg, cliq)
+            st = state.load()
+            st["cliq_cursor"] = newest
+            state.save(st)
+    except Busy:
+        return  # a previous poll is still running; the next tick is 60s away
     except Exception:
-        _logging.getLogger("cliq.poll").exception("cliq poll failed (daemon continues)")
+        _logging.getLogger("cliq.poll").exception("cliq poll failed (next tick retries)")
+
+
+def _is_owner(cliq, msg: dict, st: dict) -> bool:
+    """Owner-only verbs fail closed. Identity comes from Cliq's own payload and
+    from the OAuth token's owner, never from anything typed in a message."""
+    owner = st.get("cliq_owner_id")
+    if not owner:
+        owner = cliq.owner_id()
+        if owner:
+            st["cliq_owner_id"] = owner
+            state.save(st)
+    if not owner:
+        return False
+    return str(msg.get("sender_id") or "") == str(owner)
+
+
+# Commands that start work never run it inline: they enqueue a job and the
+# dispatcher runs it under the single agent lock. That is what keeps "exactly
+# one agent at a time" true even when Zohaib types `run` mid-morning.
+ENQUEUE_VERBS = {
+    "run": ("procurement_fetch", "looking for new bids now. I will post what I find."),
+    "brief": ("daily_briefing", "writing your briefing now."),
+    "triage": ("inbox_triage", "going through the inbox now."),
+    "write": ("marketing_writer", "writing LinkedIn drafts now."),
+}
 
 
 def _dispatch_command(verb: str, arg: str | None, cliq) -> None:
-    if verb == "run":
-        cliq.post("starting a procurement fetch cycle now.")
-        summary = job_procurement_fetch()
-        cliq.post(f"run finished: {json.dumps({k: summary.get(k) for k in ('new_records', 'go', 'no_go', 'needs_human', 'published')})}")
+    from pipeline import db
+
+    if verb in ENQUEUE_VERBS:
+        job_name, ack = ENQUEUE_VERBS[verb]
+        conn = db.connect()
+        if db.enqueue(conn, job_name):
+            cliq.post(f"{ack} It starts within a minute, or as soon as whatever "
+                      f"is running now finishes.")
+        else:
+            cliq.post("that job is not registered on this machine yet.")
+    elif verb == "proposal":
+        conn = db.connect()
+        # The record id rides in last_summary, which the agent reads back. Kept
+        # deliberately simple: there is exactly one proposal request in flight.
+        conn.execute("UPDATE jobs SET last_summary = ? WHERE name = 'proposal_writer'",
+                     (arg,))
+        conn.commit()
+        if db.enqueue(conn, "proposal_writer"):
+            cliq.post(f"writing a proposal and SOW draft for {arg}. "
+                      f"They will land as files, nothing gets sent.")
+        else:
+            cliq.post("the proposal writer is not registered on this machine yet.")
+    elif verb == "note":
+        conn = db.connect()
+        db.add_note(conn, arg or "")
+        cliq.post("noted. I will use it in your next batch of LinkedIn drafts.")
+    elif verb == "agents":
+        conn = db.connect()
+        lines = ["what runs on its own:"]
+        for row in conn.execute("SELECT * FROM jobs ORDER BY name"):
+            when = (row["next_due_at"] or "on request")[:16].replace("T", " ")
+            state_word = "" if row["enabled"] else " (off)"
+            lines.append(f"- {row['description'] or row['name']}: next {when}{state_word}")
+        cliq.post("\n".join(lines))
     elif verb == "status":
         st = state.load()
+        conn = db.connect()
         caps_state = st.get("apollo_credit_ledger", {})
-        cliq.post(f"status: paused={bool(st.get('paused'))}, "
-                  f"apollo credits used this month={list(caps_state.values())[-1] if caps_state else 0}, "
-                  f"drafts today={state.daily_count(st, 'drafts_created')}, "
-                  f"sam calls today={state.daily_count(st, 'sam_api_calls')}")
+        failures = [r["job_name"] for r in db.recent_runs(conn, 24)
+                    if r["status"] == "FAILED"]
+        cliq.post(f"paused: {'yes' if st.get('paused') else 'no'}. "
+                  f"Prospect credits used this month: "
+                  f"{list(caps_state.values())[-1] if caps_state else 0}. "
+                  f"Drafts written today: {state.daily_count(st, 'drafts_created')}. "
+                  f"Government searches today: {state.daily_count(st, 'sam_api_calls')}. "
+                  f"Anything broken in the last day: "
+                  f"{', '.join(sorted(set(failures))) if failures else 'no'}.")
     elif verb == "pause":
         st = state.load(); st["paused"] = True; state.save(st)
         cliq.post("paused. scheduled fetch/enrich jobs will skip until `resume`.")
@@ -355,29 +436,12 @@ def _dispatch_command(verb: str, arg: str | None, cliq) -> None:
                       f"(Email sending stays manual in Zoho Mail.)")
 
 
-def daemon() -> None:
-    from apscheduler.schedulers.blocking import BlockingScheduler
-
-    log, _ = new_run_logger("daemon")
-    sched_cfg = config.schedule()
-    scheduler = BlockingScheduler(
-        timezone=sched_cfg.get("timezone", "America/Chicago"),
-        job_defaults={"misfire_grace_time": 3600, "coalesce": True, "max_instances": 1})
-
-    jobs = sched_cfg.get("jobs", {})
-    if "procurement_fetch" in jobs:
-        scheduler.add_job(job_procurement_fetch, "cron",
-                          **jobs["procurement_fetch"]["cron"], id="procurement_fetch")
-    if "apollo_enrich" in jobs:
-        scheduler.add_job(job_apollo_enrich, "cron",
-                          **jobs["apollo_enrich"]["cron"], id="apollo_enrich")
-    if "cliq_poll" in jobs:
-        scheduler.add_job(job_cliq_poll, "interval",
-                          seconds=int(jobs["cliq_poll"].get("interval_seconds", 60)),
-                          id="cliq_poll")
-    log.info("daemon starting with jobs: %s (timezone %s)",
-             list(jobs), sched_cfg.get("timezone"))
-    scheduler.start()
+# The long-lived APScheduler daemon was retired on 2026-07-25 and replaced by
+# pipeline/dispatch.py. Three reasons: a permanently resident Python process
+# holds memory this machine would rather give the model; its schedule lived in a
+# file rather than a table, so adding an agent meant editing config and
+# restarting; and its per-job guard could not stop two DIFFERENT agents running
+# at once, which is the collision that actually matters on 16 GB.
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -386,12 +450,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="no Zoho writes; prints scored items")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--job", choices=["procurement_fetch", "apollo_enrich", "cliq_poll"])
-    parser.add_argument("--daemon", action="store_true")
     args = parser.parse_args(argv)
 
-    if args.daemon:
-        daemon()
-        return 0
     if args.job == "apollo_enrich":
         job_apollo_enrich(dry_run=args.dry_run, limit=args.limit)
         return 0

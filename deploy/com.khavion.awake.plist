@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Keep the Mini awake so scheduled work runs on time.
+
+       `caffeinate -s` prevents system sleep for as long as it runs, and needs
+       no administrator password, which is why it is used instead of `pmset -a
+       sleep 0` (that would need Zohaib's Mac password, and this repo never asks
+       for one). The display is left alone: it can and should still sleep.
+
+       Nothing breaks if this is disabled. launchd runs anything that came due
+       during sleep on the next wake, and the staleness window drops whatever is
+       no longer worth delivering. This just means the 6:30am briefing is
+       actually written at 6:30am. -->
+  <key>Label</key>
+  <string>com.khavion.awake</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-s</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

@@ -1,6 +1,7 @@
 # Locked dependency list (build spec) + approved additions (beautifulsoup4, pytest).
 # Pinned from a clean resolve on 2026-07-24, Python 3.13.
-APScheduler==3.11.3
+# APScheduler removed 2026-07-25: the long-lived daemon it powered was replaced
+# by pipeline/dispatch.py (launchd tick + fcntl.flock + a jobs table in SQLite).
 beautifulsoup4==4.15.0
 keyring==25.7.0
 pydantic==2.13.4

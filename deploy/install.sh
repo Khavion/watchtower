@@ -14,7 +14,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-LABEL="com.khavion.agent"
+LABEL="com.khavion.dispatch"
 AGENT_PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 NO_AGENT=0
 [ "${1:-}" = "--no-agent" ] && NO_AGENT=1
@@ -121,39 +121,65 @@ say "running offline test suite"
 say "running dry-run smoke test (zero Zoho writes)"
 .venv/bin/python -m pipeline.run --dry-run --limit 3 || die "dry-run smoke test failed"
 
-# 7. LaunchAgent --------------------------------------------------------------
+# 7. Job table ----------------------------------------------------------------
+# Schedules live in SQLite, not in plists, so adding an agent later is one row.
+# Re-registering preserves whatever Zohaib has turned off and never fires a
+# backlog: upsert_job only resets a job's next-due time if its schedule changed.
+say "registering the agent schedule"
+.venv/bin/python -m pipeline.dispatch --register || die "could not register the job table"
+
+# 8. LaunchAgents -------------------------------------------------------------
 if [ "$NO_AGENT" = "1" ]; then
   warn "--no-agent: skipping LaunchAgent registration (dev machine mode)"
 else
   mkdir -p "$HOME/Library/LaunchAgents" data/runs
-  sed "s|__REPO__|$REPO|g" deploy/com.khavion.agent.plist > "$AGENT_PLIST"
   UID_NUM="$(id -u)"
-  launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
-  launchctl enable "gui/$UID_NUM/$LABEL" 2>/dev/null || true
-  launchctl bootstrap "gui/$UID_NUM" "$AGENT_PLIST" \
-    || die "launchctl bootstrap failed (see: launchctl print gui/$UID_NUM/$LABEL)"
-  sleep 2
-  if launchctl print "gui/$UID_NUM/$LABEL" | grep -q "state = running"; then
-    say "LaunchAgent running ($LABEL); logs in data/runs/"
-  else
-    warn "LaunchAgent bootstrapped but not yet running; check:"
-    warn "  launchctl print gui/$UID_NUM/$LABEL ; tail data/runs/launchd.err.log"
+
+  # The old single long-lived daemon is retired; remove it if this machine ever
+  # ran it, or it would keep scheduling alongside the dispatcher.
+  if launchctl print "gui/$UID_NUM/com.khavion.agent" >/dev/null 2>&1; then
+    warn "removing the retired com.khavion.agent daemon (replaced by the dispatcher)"
+    launchctl bootout "gui/$UID_NUM/com.khavion.agent" 2>/dev/null || true
   fi
-  # No-inbound-ports audit: the daemon must own zero LISTEN sockets.
-  DAEMON_PIDS="$(pgrep -f 'pipeline.run --daemon' || true)"
-  if [ -n "$DAEMON_PIDS" ]; then
-    for pid in $DAEMON_PIDS; do
+  rm -f "$HOME/Library/LaunchAgents/com.khavion.agent.plist"
+
+  for label in com.khavion.dispatch com.khavion.cliq com.khavion.awake; do
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    sed "s|__REPO__|$REPO|g" "deploy/$label.plist" > "$plist"
+    launchctl bootout "gui/$UID_NUM/$label" 2>/dev/null || true
+    launchctl enable "gui/$UID_NUM/$label" 2>/dev/null || true
+    launchctl bootstrap "gui/$UID_NUM" "$plist" \
+      || die "launchctl bootstrap failed for $label (see: launchctl print gui/$UID_NUM/$label)"
+    say "registered $label"
+  done
+
+  sleep 3
+  for label in com.khavion.dispatch com.khavion.cliq; do
+    if launchctl print "gui/$UID_NUM/$label" >/dev/null 2>&1; then
+      say "$label is loaded and ticking every 60s"
+    else
+      warn "$label did not load; check: launchctl print gui/$UID_NUM/$label"
+    fi
+  done
+
+  # No-inbound-ports audit. Nothing this system runs may own a LISTEN socket.
+  for pattern in 'pipeline.dispatch' 'pipeline.run'; do
+    for pid in $(pgrep -f "$pattern" || true); do
       if lsof -nP -a -p "$pid" -iTCP -sTCP:LISTEN 2>/dev/null | grep -q .; then
-        die "daemon (pid $pid) owns a LISTEN socket - this violates the no-inbound-ports rule"
+        die "pid $pid ($pattern) owns a LISTEN socket - violates the no-inbound-ports rule"
       fi
     done
-    say "port audit: daemon owns no listening sockets"
-  fi
+  done
+  say "port audit: nothing this system runs is listening for inbound connections"
 fi
 
 echo ""
 say "install complete."
-say "manual next steps that only Zohaib can do:"
-echo "    1. Populate brain/blocklist.local.md (never committed, never shown to AI)"
+say "what only Zohaib can do:"
+echo "    1. In the khavionagent Cliq channel, type: block <domain>"
+echo "       for every company the system must never contact."
 echo "    2. sam.gov: associate your entity -> raises API quota 10/day -> 1,000/day"
-echo "    3. Cliq: channel 'khavionagent' must exist (commands: run|status|pause|resume|score|approve|reject)"
+echo "    3. Cliq: the channel 'khavionagent' must exist."
+echo "       Commands: run | status | pause | resume | agents | brief | triage |"
+echo "                 write | score <id> | approve <id> | reject <id> |"
+echo "                 proposal <id> | note <anything> | block <domain>"

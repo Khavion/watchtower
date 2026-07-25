@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The Cliq poller. Every 60 seconds the Mini CALLS OUT to Zoho and asks
+       whether Zohaib typed anything. Nothing ever calls in: no ports, no
+       tunnel, no domain, nothing to find or attack. Zoho's Deluge runs in
+       Zoho's cloud and cannot reach this Mac at all, so inbound is not merely
+       unsafe here, it is impossible.
+
+       This holds a DIFFERENT lock from the dispatcher on purpose. Chat has to
+       stay responsive while a ten-minute agent is running, so commands that
+       start work enqueue a row for the dispatcher instead of running inline. -->
+  <key>Label</key>
+  <string>com.khavion.cliq</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/.venv/bin/python</string>
+    <string>-m</string>
+    <string>pipeline.run</string>
+    <string>--job</string>
+    <string>cliq_poll</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__REPO__/data/runs/cliq.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/data/runs/cliq.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>

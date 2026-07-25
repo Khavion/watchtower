@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The dispatcher tick. Runs every 60 seconds, takes an exclusive lock,
+       runs AT MOST ONE agent, and exits. There is no long-lived process: the
+       previous APScheduler daemon held memory this machine would rather give
+       to the model, and kept its schedule in a file instead of the database.
+
+       StartInterval (not StartCalendarInterval) because the tick itself is
+       dumb; data/watchtower.db decides what is actually due. Anything that
+       came due while the Mini slept runs on the first tick after wake, and
+       anything past its staleness window is dropped rather than delivered late.
+
+       Opens NO ports. Outbound requests only. -->
+  <key>Label</key>
+  <string>com.khavion.dispatch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/.venv/bin/python</string>
+    <string>-m</string>
+    <string>pipeline.dispatch</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__REPO__/data/runs/dispatch.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/data/runs/dispatch.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>
